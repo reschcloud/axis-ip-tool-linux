@@ -46,6 +46,31 @@ sudo make install
 sudo make uninstall
 ```
 
+## Aktualisieren
+
+Die App aktualisiert sich nicht selbst. Welche Version installiert ist, zeigt
+Menü → „Über Axis IP Tool“ bzw. `axisctl version`; neue Versionen stehen auf der
+[Release-Seite](https://github.com/reschcloud/axis-ip-tool-linux/releases).
+
+**Mit dem Installationsbefehl installiert** (Paket oder Flatpak): einfach denselben Befehl erneut
+ausführen – er lädt die neueste Version und ersetzt die installierte:
+
+```sh
+curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/download/install.sh | sh
+```
+
+**Manuell installiert:** das neue Paket von der Release-Seite laden und genauso installieren wie
+beim ersten Mal (`sudo dnf install ./axis-ip-tool*.rpm`, `sudo apt install ./axis-ip-tool*.deb`
+bzw. `sudo pacman -U ./axis-ip-tool*.pkg.tar.zst`) – der Paketmanager ersetzt die alte Version.
+
+**Aus dem Quellcode:**
+
+```sh
+git pull
+make
+sudo make install
+```
+
 ## Kommandozeile
 
 ```sh

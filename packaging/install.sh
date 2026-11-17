@@ -71,7 +71,7 @@ if [ "$app" = flatpak ]; then
   command -v flatpak >/dev/null || die "flatpak ist nicht installiert"
   flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
   get "$APP_ID.$arch.flatpak"
-  flatpak install --user -y "$tmp/$APP_ID.$arch.flatpak"
+  flatpak install --user -y --reinstall "$tmp/$APP_ID.$arch.flatpak" # --reinstall = Update
 else
   case $fam in
     dnf)    ext=$arch.rpm ;;
