@@ -70,4 +70,7 @@ packaging/           nfpm-Konfiguration, Flatpak-Manifest, install.sh, Paketskri
 - Gefunden werden Geräte im selben Netzsegment (Multicast wird nicht geroutet).
 - SSDP-Antworten kommen auf einem zufälligen UDP-Port zurück. Eine strenge Firewall kann sie
   blockieren; die mDNS-Suche über Avahi ist davon nicht betroffen.
-- Kommunikation mit den Kameras per HTTP mit Digest-Auth, wie bei der IP Utility.
+- Kommunikation mit den Kameras per **HTTPS**, wenn das Gerät es anbietet, sonst per HTTP
+  (Spalte „Verbindung“). Die selbst ausgestellten Zertifikate der Kameras werden ohne Prüfung
+  akzeptiert: verschlüsselt, aber kein Schutz gegen einen aktiven Angreifer im Netz.
+  Menü → „Nur HTTPS verwenden“ bzw. `axisctl --https-only` verbietet den Rückfall auf HTTP.

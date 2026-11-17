@@ -231,11 +231,7 @@ func (w *window) onBrowser() {
 	if d == nil {
 		return
 	}
-	uri := "http://" + d.IP + "/"
-	if d.Port != 0 && d.Port != 80 {
-		uri = fmt.Sprintf("http://%s:%d/", d.IP, d.Port)
-	}
-	gtk.NewURILauncher(uri).Launch(context.Background(), &w.Window, nil)
+	gtk.NewURILauncher(d.WebURL()).Launch(context.Background(), &w.Window, nil)
 }
 
 func (w *window) onPassword() {
@@ -253,6 +249,13 @@ func (w *window) onPassword() {
 	} else {
 		dlg.add(note("Legt den ersten Administrator auf einem Gerät im Werkszustand an. " +
 			"Ab AXIS OS 10 ist auch ein anderer Benutzername als „root“ möglich."))
+	}
+	if d.HTTPS != nil && !*d.HTTPS {
+		warn := note("⚠ Dieses Gerät ist nur per HTTP erreichbar. Das Passwort wird unverschlüsselt " +
+			"übertragen und kann im lokalen Netz mitgelesen werden.")
+		warn.RemoveCSSClass("dim-label")
+		warn.AddCSSClass("warning")
+		dlg.add(warn)
 	}
 	dlg.add(boxedList(user, p1, p2))
 	dlg.SetFocus(p1)

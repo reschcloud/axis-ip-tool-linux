@@ -20,6 +20,7 @@ type Device struct {
 	NeedsSetup *bool // nil = unbekannt
 	Locked     *bool // Geräteinfos nur mit Anmeldung lesbar; nil = unbekannt
 	Unlocked   bool  // gültige Zugangsdaten bekannt (bleibt gesetzt)
+	HTTPS      *bool // Gerät spricht HTTPS; nil = unbekannt
 	Online     bool
 	Source     string // "mDNS", "SSDP", "VAPIX"
 }
@@ -59,14 +60,19 @@ func (d *Device) Merge(u Device) {
 			d.Port = u.Port
 		}
 	}
+	// Zustandsangaben gelten nur für die Adresse, unter der sie ermittelt wurden.
+	sameAddr := u.IP == "" || u.IP == d.IP
 	set(&d.Name, u.Name)
 	set(&d.Model, u.Model)
 	set(&d.Firmware, u.Firmware)
-	if u.NeedsSetup != nil {
+	if u.NeedsSetup != nil && sameAddr {
 		d.NeedsSetup = u.NeedsSetup
 	}
-	if u.Locked != nil {
+	if u.Locked != nil && sameAddr {
 		d.Locked = u.Locked
+	}
+	if u.HTTPS != nil && sameAddr {
+		d.HTTPS = u.HTTPS
 	}
 	d.Unlocked = d.Unlocked || u.Unlocked
 	d.Online = u.Online
@@ -77,6 +83,8 @@ func (d Device) Status() string {
 	switch {
 	case !d.Online:
 		return "Offline"
+	case HTTPSOnly() && d.HTTPS != nil && !*d.HTTPS:
+		return "Kein HTTPS"
 	case d.NeedsSetup != nil && *d.NeedsSetup:
 		return "Kein Passwort gesetzt"
 	case d.IsLocked():
@@ -86,6 +94,31 @@ func (d Device) Status() string {
 	default:
 		return "OK"
 	}
+}
+
+// Connection liefert „HTTPS“, „HTTP“ oder "" (unbekannt).
+func (d Device) Connection() string {
+	switch {
+	case d.HTTPS == nil:
+		return ""
+	case *d.HTTPS:
+		return "HTTPS"
+	}
+	return "HTTP"
+}
+
+// WebURL ist die Adresse der Weboberfläche.
+func (d Device) WebURL() string {
+	if d.HTTPS != nil && *d.HTTPS {
+		if httpsPort == 443 {
+			return "https://" + d.IP + "/"
+		}
+		return "https://" + net.JoinHostPort(d.IP, strconv.Itoa(httpsPort)) + "/"
+	}
+	if d.Port != 0 && d.Port != 80 {
+		return "http://" + net.JoinHostPort(d.IP, strconv.Itoa(d.Port)) + "/"
+	}
+	return "http://" + d.IP + "/"
 }
 
 // IsLocked: Gerät verlangt eine Anmeldung, die wir noch nicht kennen.

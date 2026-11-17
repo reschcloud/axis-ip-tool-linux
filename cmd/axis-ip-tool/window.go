@@ -29,16 +29,21 @@ type column struct {
 	less   func(a, b *axis.Device) bool
 }
 
-const statusColumn = 5 // Index der Spalte „Status“ in columns
-
 var columns = []column{
 	{"Name", true, func(d *axis.Device) string { return d.Name }, nil},
 	{"IP-Adresse", false, func(d *axis.Device) string { return d.IP }, func(a, b *axis.Device) bool { return axis.IPLess(a.IP, b.IP) }},
 	{"Seriennummer", false, func(d *axis.Device) string { return d.Serial }, nil},
 	{"Modell", true, func(d *axis.Device) string { return d.Model }, nil},
 	{"Firmware", false, func(d *axis.Device) string { return d.Firmware }, nil},
+	{"Verbindung", false, func(d *axis.Device) string { return d.Connection() }, nil},
 	{"Status", false, func(d *axis.Device) string { return d.Status() }, nil},
 }
+
+// Indizes besonderer Spalten in columns
+var (
+	connColumn   = len(columns) - 2
+	statusColumn = len(columns) - 1
+)
 
 type window struct {
 	*adw.ApplicationWindow
@@ -105,6 +110,7 @@ func (w *window) build() {
 	hb.SetTitleWidget(clamp)
 
 	menu := gio.NewMenu()
+	menu.Append("Nur HTTPS verwenden", "win.https-only")
 	menu.Append("Gespeicherte Anmeldedaten vergessen", "win.forget")
 	menu.Append("Über Axis IP Tool", "app.about")
 	mb := gtk.NewMenuButton()
@@ -200,6 +206,22 @@ func (w *window) build() {
 		a.ConnectActivate(func(*glib.Variant) { cb() })
 		w.AddAction(a)
 	}
+	httpsOnly := gio.NewSimpleActionStateful("https-only", nil, glib.NewVariantBoolean(axis.HTTPSOnly()))
+	httpsOnly.ConnectActivate(func(*glib.Variant) {
+		on := !axis.HTTPSOnly()
+		axis.SetHTTPSOnly(on)
+		httpsOnly.SetState(glib.NewVariantBoolean(on))
+		if err := saveSettings(settings{HTTPSOnly: on}); err != nil {
+			w.toast("Einstellung nicht gespeichert: " + err.Error())
+		}
+		if on {
+			w.toast("Nur noch verschlüsselte Verbindungen (HTTPS)")
+		} else {
+			w.toast("HTTP ist wieder erlaubt, wenn ein Gerät kein HTTPS anbietet")
+		}
+		w.rescan()
+	})
+	w.AddAction(httpsOnly)
 	w.updateActions()
 }
 
@@ -280,6 +302,19 @@ func keyOf(p unsafe.Pointer) string {
 
 func (w *window) render(l *gtk.Label, idx int, d *axis.Device) {
 	l.SetText(columns[idx].text(d))
+	if idx == connColumn {
+		l.RemoveCSSClass("warning")
+		l.SetTooltipText("")
+		switch d.Connection() {
+		case "HTTPS":
+			l.SetText("🔒 HTTPS")
+			l.SetTooltipText("Verschlüsselt (Zertifikat wird nicht geprüft)")
+		case "HTTP":
+			l.AddCSSClass("warning")
+			l.SetTooltipText("Unverschlüsselt – Gerät bietet kein HTTPS an")
+		}
+		return
+	}
 	if idx != statusColumn {
 		return
 	}
@@ -298,7 +333,7 @@ func (w *window) render(l *gtk.Label, idx int, d *axis.Device) {
 		l.AddCSSClass("dim-label")
 	case d.IsLocked():
 		l.AddCSSClass("error")
-		l.SetText("🔒 Gesperrt")
+		l.SetText("🔑 Gesperrt")
 		l.SetTooltipText("Gerät verlangt eine Anmeldung – klicken zum Entsperren")
 		l.SetCursorFromName("pointer")
 	case d.NeedsSetup != nil && *d.NeedsSetup:

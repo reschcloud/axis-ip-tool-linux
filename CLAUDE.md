@@ -32,6 +32,9 @@ Für schnelle Prüfungen immer `make gui` verwenden.
     SSDP-Einträge ohne Seriennummer werden umgeschlüsselt). Von CLI und GUI genutzt.
   - `vapix.go`: `Client` mit eigener Digest-Auth (`digest.go`, MD5 + SHA-256), JSON-APIs mit
     Fallbacks auf `param.cgi`/`date.cgi` für alte Firmware. `ErrAuth` signalisiert „neu anmelden“.
+    Protokoll: `ProbeHTTPS` (TLS-Handshake auf 443, 2 min gecacht) → HTTPS, sonst HTTP-Port;
+    `SetHTTPSOnly(true)` → `ErrNoHTTPS` statt Rückfall. Zertifikate werden bewusst NICHT geprüft
+    und auch nicht gemerkt (Entscheidung des Nutzers).
 - `cmd/axis-ip-tool`: GUI. Liste = `gtk.StringList` mit Geräteschlüsseln → Filter/Sort-Modelle →
   `ColumnView`. Zellen werden live aktualisiert über `window.cells` (gebundene Labels je Schlüssel),
   ohne Modelländerung (Auswahl bleibt erhalten). Statuszelle „Gesperrt“ ist klickbar → `unlock()`.
@@ -67,7 +70,8 @@ Für schnelle Prüfungen immer `make gui` verwenden.
 Getestet (Ubuntu 24.04-Container, Xvfb, Fake-Kameras als Python-HTTP-Server + `avahi-publish`):
 - `go test ./internal/...`: VAPIX-Ablauf gegen Fake-Kamera inkl. Digest-Auth, gesperrte
   Geräteinfos, NTP, Snapshot, Registry (Link-Local-Vorrang, Gesperrt-Status), Parser.
-- Echte Kamera AXIS P3225-VE Mk II: Suche, Erstpasswort, Gesperrt-Erkennung.
+- Echte Kameras AXIS P3225-VE Mk II und Q2101-TE (AXIS OS 11.11): Suche, Erstpasswort,
+  Gesperrt-Erkennung, HTTPS-Erkennung.
 - `axisctl list` findet per Avahi angekündigte Geräte und reichert sie an.
 - GUI: Liste, Status, Passwort-Dialog (legt Benutzer an), Netzwerk-Dialog lädt Konfiguration.
 

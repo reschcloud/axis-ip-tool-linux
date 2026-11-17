@@ -11,7 +11,7 @@ ARCH    ?= $(shell go env GOARCH)
 PREFIX  ?= /usr
 DESTDIR ?=
 BUILDFLAGS := -trimpath
-LDFLAGS := -s -w
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
 APP_ID  := io.github.reschcloud.AxisIpTool
 BIN     := build/axis-ip-tool build/axisctl

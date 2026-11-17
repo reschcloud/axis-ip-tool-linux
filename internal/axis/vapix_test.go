@@ -254,3 +254,68 @@ func TestHelpers(t *testing.T) {
 		t.Error("ParseRootDesc", r, err)
 	}
 }
+
+func resetScheme(t *testing.T, port int) {
+	old := httpsPort
+	httpsPort = port
+	schemeMu.Lock()
+	schemeCache = map[string]schemeEntry{}
+	schemeMu.Unlock()
+	t.Cleanup(func() {
+		httpsPort = old
+		SetHTTPSOnly(false)
+		schemeMu.Lock()
+		schemeCache = map[string]schemeEntry{}
+		schemeMu.Unlock()
+	})
+}
+
+func TestHTTPSPreferred(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeCamera{users: map[string]string{"root": "geheim123"}}
+	srv := httptest.NewTLSServer(f) // selbst signiert, wie bei den Kameras
+	t.Cleanup(srv.Close)
+	host, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+	p, _ := strconv.Atoi(port)
+	resetScheme(t, p)
+
+	// HTTP-Port zeigt ins Leere – es darf nur HTTPS verwendet werden
+	c := NewClient(host, 1, "root", "geheim123")
+	info, err := c.BasicInfo(ctx)
+	if err != nil || info.Firmware != "11.11.73" {
+		t.Fatalf("BasicInfo über HTTPS = %+v, %v", info, err)
+	}
+	if !c.Secure(ctx) {
+		t.Fatal("Client meldet keine HTTPS-Verbindung")
+	}
+	if d := (Device{IP: host, HTTPS: &[]bool{true}[0]}); !strings.HasPrefix(d.WebURL(), "https://") {
+		t.Fatal(d.WebURL())
+	}
+}
+
+func TestHTTPFallbackAndHTTPSOnly(t *testing.T) {
+	ctx := context.Background()
+	_, host, port := startFake(t) // nur HTTP
+	// Port für HTTPS: ein sicher geschlossener Port
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	closed := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	resetScheme(t, closed)
+
+	c := NewClient(host, port, "", "")
+	if _, err := c.BasicInfo(ctx); err != nil {
+		t.Fatalf("Rückfall auf HTTP: %v", err)
+	}
+	if c.Secure(ctx) {
+		t.Fatal("HTTP als sicher gemeldet")
+	}
+
+	SetHTTPSOnly(true)
+	if _, err := NewClient(host, port, "", "").BasicInfo(ctx); !errors.Is(err, ErrNoHTTPS) {
+		t.Fatalf("Nur HTTPS: %v", err)
+	}
+	no := false
+	if s := (Device{IP: host, Online: true, HTTPS: &no}).Status(); s != "Kein HTTPS" {
+		t.Fatalf("Status = %s", s)
+	}
+}

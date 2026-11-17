@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,37 +25,135 @@ var ErrAuth = errors.New("Benutzername oder Passwort falsch")
 // ErrNotSupported: Das Gerät kennt die (neue) API nicht.
 var ErrNotSupported = errors.New("von der Firmware nicht unterstützt")
 
-// Client spricht VAPIX mit einem einzelnen Gerät.
+// ErrNoHTTPS: „Nur HTTPS“ ist eingeschaltet, das Gerät spricht aber kein HTTPS.
+var ErrNoHTTPS = errors.New("Gerät ist nicht per HTTPS erreichbar (Einstellung „Nur HTTPS“)")
+
+// ---------------------------------------------------------------- HTTPS-Erkennung
+
+// httpsPort ist der Port, auf dem HTTPS erwartet wird (in Tests überschreibbar).
+var httpsPort = 443
+
+var (
+	httpsOnly   atomic.Bool
+	schemeMu    sync.Mutex
+	schemeCache = map[string]schemeEntry{}
+)
+
+type schemeEntry struct {
+	https bool
+	at    time.Time
+}
+
+const schemeTTL = 2 * time.Minute
+
+// SetHTTPSOnly: true = nie auf unverschlüsseltes HTTP zurückfallen.
+func SetHTTPSOnly(on bool) {
+	httpsOnly.Store(on)
+}
+
+// HTTPSOnly liefert die aktuelle Einstellung.
+func HTTPSOnly() bool { return httpsOnly.Load() }
+
+// Selbst ausgestellte Zertifikate der Kameras werden akzeptiert (keine Prüfung):
+// Die Verbindung ist verschlüsselt, aber nicht gegen einen aktiven Angreifer geschützt.
+func tlsConfig() *tls.Config {
+	return &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}
+}
+
+// ProbeHTTPS prüft per TLS-Handshake, ob host HTTPS spricht. Das Ergebnis wird kurz gecacht.
+func ProbeHTTPS(ctx context.Context, host string) bool {
+	schemeMu.Lock()
+	e, ok := schemeCache[host]
+	schemeMu.Unlock()
+	if ok && time.Since(e.at) < schemeTTL {
+		return e.https
+	}
+	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: 3 * time.Second}, Config: tlsConfig()}
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(httpsPort)))
+	if err == nil {
+		conn.Close()
+	} else if ctx.Err() != nil {
+		return false // abgebrochen – nichts merken
+	}
+	schemeMu.Lock()
+	schemeCache[host] = schemeEntry{https: err == nil, at: time.Now()}
+	schemeMu.Unlock()
+	return err == nil
+}
+
+// ---------------------------------------------------------------- Client
+
+// Client spricht VAPIX mit einem einzelnen Gerät – per HTTPS, wenn das Gerät es
+// anbietet, sonst (außer bei „Nur HTTPS“) per HTTP.
 type Client struct {
-	base       string
+	host       string
+	port       int // HTTP-Port
 	user, pass string
 	hc         *http.Client
 
-	mu   sync.Mutex
-	chal *challenge
+	mu     sync.Mutex
+	base   string // ermittelt beim ersten Aufruf
+	secure bool
+	chal   *challenge
 }
 
-// NewClient erzeugt einen Client. user darf leer sein (nur offene Endpunkte).
+// NewClient erzeugt einen Client. port ist der HTTP-Port (0 = 80).
+// user darf leer sein (nur offene Endpunkte).
 func NewClient(host string, port int, user, pass string) *Client {
 	if port == 0 {
 		port = 80
 	}
 	return &Client{
-		base: "http://" + net.JoinHostPort(host, strconv.Itoa(port)),
+		host: host, port: port,
 		user: user, pass: pass,
 		hc: &http.Client{
 			Timeout: 8 * time.Second,
 			Transport: &http.Transport{
 				Proxy:           nil, // Kameras sind lokal, nie über einen Proxy
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				TLSClientConfig: tlsConfig(),
 			},
 		},
 	}
 }
 
+// baseURL wählt beim ersten Aufruf das Protokoll.
+func (c *Client) baseURL(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	base := c.base
+	c.mu.Unlock()
+	if base != "" {
+		return base, nil
+	}
+	secure := ProbeHTTPS(ctx, c.host)
+	switch {
+	case secure:
+		base = "https://" + net.JoinHostPort(c.host, strconv.Itoa(httpsPort))
+	case HTTPSOnly():
+		return "", ErrNoHTTPS
+	default:
+		base = "http://" + net.JoinHostPort(c.host, strconv.Itoa(c.port))
+	}
+	c.mu.Lock()
+	c.base, c.secure = base, secure
+	c.mu.Unlock()
+	return base, nil
+}
+
+// Secure meldet, ob der Client verschlüsselt (HTTPS) mit dem Gerät spricht.
+func (c *Client) Secure(ctx context.Context) bool {
+	_, err := c.baseURL(ctx)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return err == nil && c.secure
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body []byte, ctype string, auth bool) (int, []byte, error) {
+	base, err := c.baseURL(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
 	send := func(authz string) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}

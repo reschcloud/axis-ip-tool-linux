@@ -64,3 +64,14 @@ func TestLockedStatus(t *testing.T) {
 		t.Fatalf("Status nach Entsperren = %s", s)
 	}
 }
+
+func TestStateFromLinkLocalIgnored(t *testing.T) {
+	r := NewRegistry()
+	yes, no := true, false
+	r.Update(Device{Serial: "ACCC8E000003", IP: "10.0.0.7", Online: true, HTTPS: &yes})
+	r.Update(Device{Serial: "ACCC8E000003", IP: "169.254.3.3", Online: true, HTTPS: &no, Locked: &yes})
+	d := r.Get("ACCC8E000003")
+	if d.Connection() != "HTTPS" || d.IsLocked() {
+		t.Fatalf("Zustand der Link-Local-Adresse übernommen: %s, gesperrt=%v", d.Connection(), d.IsLocked())
+	}
+}

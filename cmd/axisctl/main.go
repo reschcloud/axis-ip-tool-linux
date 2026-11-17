@@ -20,7 +20,12 @@ import (
 	"axis-ip-tool/internal/axis"
 )
 
+// version wird beim Bauen gesetzt (-ldflags "-X main.version=…", siehe Makefile).
+var version = "dev"
+
 const usage = `axisctl – Axis-Geräte finden und konfigurieren
+
+Aufruf: axisctl [--https-only] BEFEHL …
 
 Befehle:
   list     [-t 5s]                                  Geräte im Netz suchen
@@ -31,11 +36,21 @@ Befehle:
   time     <ip> [-tz Europe/Vienna] [-sync=true]
                 [-ntp dhcp|off|SERVER,SERVER]       Zeitzone/Uhrzeit/NTP setzen
   restart  <ip>                                     Neustart
+  version                                           Version anzeigen
 
 Anmeldung: -u BENUTZER (Standard root), Passwort aus $AXIS_PASSWORD oder Abfrage.
+Verbindung: HTTPS, wenn das Gerät es anbietet (Zertifikat wird nicht geprüft), sonst HTTP.
+  --https-only bzw. AXIS_HTTPS_ONLY=1 verbietet den Rückfall auf HTTP.
 `
 
 func main() {
+	if v := os.Getenv("AXIS_HTTPS_ONLY"); v == "1" || v == "true" || v == "yes" {
+		axis.SetHTTPSOnly(true)
+	}
+	if len(os.Args) > 1 && (os.Args[1] == "--https-only" || os.Args[1] == "-https-only") {
+		axis.SetHTTPSOnly(true)
+		os.Args = append(os.Args[:1], os.Args[2:]...)
+	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -57,6 +72,8 @@ func main() {
 		err = cmdTime(ctx, args)
 	case "restart":
 		err = cmdRestart(ctx, args)
+	case "version", "--version":
+		fmt.Println("axisctl", version)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
@@ -97,9 +114,9 @@ func cmdList(ctx context.Context, args []string) error {
 	defer mu.Unlock()
 	list := reg.All()
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tIP\tSERIENNUMMER\tMODELL\tFIRMWARE\tSTATUS")
+	fmt.Fprintln(tw, "NAME\tIP\tSERIENNUMMER\tMODELL\tFIRMWARE\tVERBINDUNG\tSTATUS")
 	for _, d := range list {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", d.Name, d.IP, d.Serial, d.Model, d.Firmware, d.Status())
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", d.Name, d.IP, d.Serial, d.Model, d.Firmware, d.Connection(), d.Status())
 	}
 	tw.Flush()
 	if len(list) == 0 {
@@ -129,6 +146,11 @@ func cmdInfo(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("Modell:        %s\nSeriennummer:  %s\nFirmware:      %s\n", info.Model, info.Serial, info.Firmware)
+	conn := "HTTP (unverschlüsselt)"
+	if axis.NewClient(ip, 80, "", "").Secure(ctx) {
+		conn = "HTTPS"
+	}
+	fmt.Printf("Verbindung:    %s\n", conn)
 	if needs, _ := axis.NewClient(ip, 80, "", "").NeedsInitialUser(ctx); needs {
 		fmt.Println("Status:        Werkszustand, noch kein Passwort gesetzt (axisctl init)")
 		return nil
@@ -181,7 +203,11 @@ func cmdInit(ctx context.Context, args []string) error {
 	if len(pw) < 8 {
 		return errors.New("Passwort zu kurz (mindestens 8 Zeichen)")
 	}
-	if err := axis.NewClient(ip, 80, "", "").CreateInitialUser(ctx, *user, pw); err != nil {
+	c := axis.NewClient(ip, 80, "", "")
+	if !c.Secure(ctx) && !axis.HTTPSOnly() {
+		fmt.Fprintln(os.Stderr, "Warnung: Gerät bietet kein HTTPS – das Passwort wird unverschlüsselt übertragen.")
+	}
+	if err := c.CreateInitialUser(ctx, *user, pw); err != nil {
 		return err
 	}
 	fmt.Printf("Benutzer %q angelegt.\n", *user)

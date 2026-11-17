@@ -8,14 +8,19 @@ import (
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
+
+	"axis-ip-tool/internal/axis"
 )
 
-const (
-	appID   = "io.github.reschcloud.AxisIpTool"
-	version = "0.2.0"
-)
+const appID = "io.github.reschcloud.AxisIpTool"
+
+// version wird beim Bauen gesetzt (-ldflags "-X main.version=…", siehe Makefile).
+var version = "dev"
 
 func main() {
+	if s, err := loadSettings(); err == nil {
+		axis.SetHTTPSOnly(s.HTTPSOnly)
+	}
 	app := adw.NewApplication(appID, gio.ApplicationFlagsNone)
 
 	about := gio.NewSimpleAction("about", nil)

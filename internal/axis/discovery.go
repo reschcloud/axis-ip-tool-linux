@@ -93,8 +93,18 @@ func (d *discoverer) enrich(dev Device) {
 		locked := err != nil
 		upd.Locked = &locked
 	}
+	reachable := err == nil || errors.Is(err, ErrAuth)
 	if needs, err := c.NeedsInitialUser(ctx); err == nil {
 		upd.NeedsSetup = &needs
+		reachable = true
+	}
+	// Protokoll nur melden, wenn das Gerät unter dieser Adresse geantwortet hat
+	// (sonst würde z. B. eine tote Link-Local-Adresse als „HTTP“ erscheinen).
+	if secure := c.Secure(ctx); reachable || secure {
+		upd.HTTPS = &secure
+	} else if errors.Is(err, ErrNoHTTPS) {
+		no := false
+		upd.HTTPS = &no
 	}
 	if ctx.Err() == nil || d.ctx.Err() == nil {
 		d.found(upd)
