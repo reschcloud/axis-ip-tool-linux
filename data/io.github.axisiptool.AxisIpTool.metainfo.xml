@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.axisiptool.AxisIpTool</id>
+  <name>Axis IP Tool</name>
+  <summary>Find and set up Axis network cameras</summary>
+  <summary xml:lang="de">Axis-Netzwerkkameras finden und einrichten</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.axisiptool">
+    <name>Axis IP Tool contributors</name>
+  </developer>
+  <description>
+    <p>Finds Axis devices on the local network (Bonjour/mDNS and SSDP) and performs the basic
+      setup known from the AXIS IP Utility:</p>
+    <ul>
+      <li>Create the first administrator on devices in factory default state</li>
+      <li>Configure IPv4 (DHCP or static), hostname and DNS</li>
+      <li>Set time zone, NTP servers or synchronise the clock</li>
+      <li>Show a live snapshot preview</li>
+      <li>Open the web interface and restart devices</li>
+    </ul>
+    <p xml:lang="de">Findet Axis-Geräte im lokalen Netz (Bonjour/mDNS und SSDP) und erledigt die
+      Grundeinrichtung wie die AXIS IP Utility.</p>
+    <p>Not an official product of Axis Communications AB.</p>
+  </description>
+  <url type="homepage">https://github.com/OWNER/axis-ip-tool</url>
+  <url type="bugtracker">https://github.com/OWNER/axis-ip-tool/issues</url>
+  <launchable type="desktop-id">io.github.axisiptool.AxisIpTool.desktop</launchable>
+  <provides>
+    <binary>axis-ip-tool</binary>
+    <binary>axisctl</binary>
+  </provides>
+  <categories>
+    <category>Network</category>
+    <category>Utility</category>
+  </categories>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-17">
+      <description><p>First release: discovery, initial password, network, time/NTP, snapshot preview.</p></description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,44 @@
+# Flatpak-Manifest. Lokal bauen: `make flatpak` (lädt die Go-Module beim Bauen aus dem Netz).
+# Für Flathub müssten die Module vorab vendored werden (go mod vendor), weil dort ohne Netz gebaut wird.
+id: io.github.axisiptool.AxisIpTool
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+command: axis-ip-tool
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Kameras per HTTP ansprechen und SSDP-Suche
+  - --share=network
+  # Bonjour/mDNS-Suche über den Avahi-Dienst des Systems
+  - --system-talk-name=org.freedesktop.Avahi
+
+build-options:
+  append-path: /usr/lib/sdk/golang/bin
+  env:
+    GOPATH: /run/build/axis-ip-tool/go
+    GOCACHE: /run/build/axis-ip-tool/go-cache
+    GOTOOLCHAIN: local
+
+modules:
+  - name: axis-ip-tool
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - go build -trimpath -ldflags '-s -w' -o build/axis-ip-tool ./cmd/axis-ip-tool
+      - CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o build/axisctl ./cmd/axisctl
+      - make install-app PREFIX=/app DESTDIR=/
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - build
+          - dist
+          - .flatpak-builder

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#62a0ea"/><stop offset="1" stop-color="#1c71d8"/>
+    </linearGradient>
+    <linearGradient id="dome" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#deddda"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="12" width="112" height="104" rx="22" fill="#1a5fb4"/>
+  <rect x="8" y="8" width="112" height="104" rx="22" fill="url(#bg)"/>
+  <!-- Signalbögen -->
+  <g fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" opacity=".9">
+    <path d="M44 40a28 28 0 0 1 40 0"/>
+    <path d="M32 28a44 44 0 0 1 64 0" opacity=".6"/>
+  </g>
+  <!-- Kuppelkamera -->
+  <rect x="30" y="56" width="68" height="10" rx="5" fill="#f6f5f4"/>
+  <path d="M36 66h56v4a28 28 0 0 1-56 0z" fill="url(#dome)"/>
+  <circle cx="64" cy="78" r="12" fill="#241f31"/>
+  <circle cx="64" cy="78" r="6" fill="#3d3846"/>
+  <circle cx="60" cy="74" r="2.5" fill="#99c1f1"/>
+</svg>
