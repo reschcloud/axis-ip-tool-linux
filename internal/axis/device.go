@@ -13,18 +13,22 @@ import (
 
 // Device beschreibt ein gefundenes Axis-Gerät. Leere Felder bedeuten „unbekannt“.
 type Device struct {
-	Serial     string // Seriennummer = MAC ohne Trennzeichen, Großbuchstaben
-	IP         string
-	Port       int
-	Name       string
-	Model      string
-	Firmware   string
-	NeedsSetup *bool // nil = unbekannt
-	Locked     *bool // Geräteinfos nur mit Anmeldung lesbar; nil = unbekannt
-	Unlocked   bool  // gültige Zugangsdaten bekannt (bleibt gesetzt)
-	HTTPS      *bool // Gerät spricht HTTPS; nil = unbekannt
-	Online     bool
-	Source     string // "mDNS", "SSDP", "VAPIX"
+	Serial      string // Seriennummer = MAC ohne Trennzeichen, Großbuchstaben
+	IP          string
+	Port        int
+	Name        string
+	Hostname    string // aus mDNS (ohne „.local“) oder – wenn HostnameSet – vom Gerät gelesen/gesetzt
+	HostnameSet bool   // Hostname stammt aus der Gerätekonfiguration (Vorrang vor mDNS)
+	Model       string
+	Firmware    string
+	NeedsSetup  *bool // nil = unbekannt
+	Locked      *bool // Geräteinfos nur mit Anmeldung lesbar; nil = unbekannt
+	Unlocked    bool  // gültige Zugangsdaten bekannt (bis AuthFailed)
+	AuthFailed  bool  // zuletzt verwendete Zugangsdaten wurden abgelehnt (bis Unlocked)
+	Enriched    bool  // Abfrage von Zustand/Protokoll ist durch (auch wenn erfolglos)
+	HTTPS       *bool // Gerät spricht HTTPS; nil = unbekannt
+	Online      bool
+	Source      string // "mDNS", "SSDP", "VAPIX"
 }
 
 // Key identifiziert ein Gerät über Suchläufe hinweg.
@@ -65,10 +69,19 @@ func (d *Device) Merge(u Device) {
 	// Zustandsangaben gelten nur für die Adresse, unter der sie ermittelt wurden.
 	sameAddr := u.IP == "" || u.IP == d.IP
 	set(&d.Name, u.Name)
+	// mDNS kündigt bei älterer Firmware „axis-<seriennummer>“ an, unabhängig vom
+	// konfigurierten Hostnamen – der aus der Konfiguration hat daher Vorrang.
+	if u.Hostname != "" && (u.HostnameSet || !d.HostnameSet) {
+		d.Hostname = u.Hostname
+	}
+	d.HostnameSet = d.HostnameSet || u.HostnameSet
 	set(&d.Model, u.Model)
 	set(&d.Firmware, u.Firmware)
 	if u.NeedsSetup != nil && sameAddr {
 		d.NeedsSetup = u.NeedsSetup
+		if *u.NeedsSetup { // Werkszustand: keine Benutzer, also auch keine gültige Anmeldung
+			d.Unlocked, d.AuthFailed = false, false
+		}
 	}
 	if u.Locked != nil && sameAddr {
 		d.Locked = u.Locked
@@ -76,7 +89,15 @@ func (d *Device) Merge(u Device) {
 	if u.HTTPS != nil && sameAddr {
 		d.HTTPS = u.HTTPS
 	}
-	d.Unlocked = d.Unlocked || u.Unlocked
+	d.Enriched = d.Enriched || u.Enriched
+	switch {
+	case u.Unlocked:
+		d.Unlocked, d.AuthFailed = true, false
+		no := false // gültige Anmeldung → es gibt einen Benutzer
+		d.NeedsSetup = &no
+	case u.AuthFailed:
+		d.Unlocked, d.AuthFailed = false, true
+	}
 	d.Online = u.Online
 }
 
@@ -89,12 +110,14 @@ func (d Device) Status() string {
 		return "Kein HTTPS"
 	case d.NeedsSetup != nil && *d.NeedsSetup:
 		return "Kein Passwort gesetzt"
-	case d.IsLocked():
-		return "Gesperrt"
+	case d.AuthFailed:
+		return "Passwort falsch"
 	case IsLinkLocal(d.IP):
 		return "Link-Local-Adresse"
+	case d.Unlocked:
+		return "Angemeldet"
 	default:
-		return "OK"
+		return "Nicht angemeldet"
 	}
 }
 

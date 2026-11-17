@@ -37,10 +37,10 @@ Für schnelle Prüfungen immer `make gui` verwenden.
     und auch nicht gemerkt (Entscheidung des Nutzers).
 - `cmd/axis-ip-tool`: GUI. Liste = `gtk.StringList` mit Geräteschlüsseln → Filter/Sort-Modelle →
   `ColumnView`. Zellen werden live aktualisiert über `window.cells` (gebundene Labels je Schlüssel),
-  ohne Modelländerung (Auswahl bleibt erhalten). Statuszelle „Gesperrt“ ist klickbar → `unlock()`.
+  ohne Modelländerung (Auswahl bleibt erhalten). Statuszelle „Nicht angemeldet“/„Passwort falsch“ ist klickbar → `unlock()`.
   Netzwerkaufrufe immer in Goroutinen, Rückkehr in den GTK-Thread über `glib.IdleAdd` (`ui()`/`async()`/`withLogin()` in actions.go).
 - `internal/axis/batch.go`: Mehrfachkonfiguration. `PlanBatch` (IP-Bereich, überspringt belegte
-  IPs/Gateway/Netz-/Broadcast, Hostname-Muster `{nr:02}` `{serial}` `{ip}`), `CheckAssignments`
+  IPs/Gateway/Netz-/Broadcast, Hostname-Muster: `#` Nummer, `##` zweistellig, `@` letzte IP-Zahl), `CheckAssignments`
   (nach Handänderungen), `ParsePlanCSV`/`ApplyPlan`, `AddressInUse` (TCP 80/443), `RunBatch`
   (sequenziell, IP zuletzt, Fehler stoppen den Rest nicht). GUI: `cmd/axis-ip-tool/batch.go`
   (Assistent mit `adw.NavigationView`), CLI: `axisctl batch`.
@@ -67,6 +67,13 @@ Für schnelle Prüfungen immer `make gui` verwenden.
 - Neuere AXIS OS (gesehen an P3225-VE Mk II) beantworten `basicdeviceinfo.cgi` nach dem Anlegen
   eines Benutzers nur noch mit Anmeldung (401). Modell kommt dann aus dem mDNS-Namen; Firmware lädt
   die GUI per `refreshInfo()` nach, sobald Zugangsdaten bekannt sind (`getAllProperties`).
+- Werkszustand über `systemready.cgi` (`needsetup`, ohne Anmeldung) erkennen. AXIS OS 11
+  beantwortet `pwdgrp.cgi?action=get` auch im Werkszustand mit 401 – die alte Heuristik
+  (wie AXIS IP Utility) ist nur noch Fallback für alte Firmware. `ErrNoUser`/`ErrHasUser`.
+- Zugangsdaten nur über `CheckLogin` (`pwdgrp.cgi?action=get`, verlangt immer Admin) prüfen –
+  `basicdeviceinfo.cgi`/`param.cgi` antworten je nach Gerät auch anonym, also auch mit falschem
+  Passwort. Status: „Nicht angemeldet“ (auch gesperrte Geräte, `IsLocked` nur noch Tooltip) → „Angemeldet“ (`Unlocked`) bzw.
+  „Passwort falsch“ (`AuthFailed`, gesetzt bei jedem `ErrAuth`, GUI: `window.setAuth`).
 - **ARP/Ping-IP-Zuweisung wurde am 2026-11-17 vorerst entfernt** (Systemhelfer, D-Bus-Dienst,
   polkit, `internal/arpping`, `axisctl assign`). Bei Bedarf neu umsetzen.
 
@@ -94,6 +101,6 @@ Es gibt (noch) keinen GitHub-Actions-Workflow im Projekt.
 4. UI in Blueprint (`.blp`) auslagern? Aktuell im Code gebaut (gotk4-Templates sind umständlich).
 5. Mehrfachkonfiguration: umgesetzt (v0.2.0), GUI-Assistent noch nicht an echten Kameras
    durchgespielt. Idee: Vorschaubild je Gerät in der Vorschau-Tabelle; Neustart für mehrere.
-6. Firmware-Update, Werksreset. (NTP über `ntp.cgi` ist umgesetzt, an P3225-VE Mk II noch ungetestet.)
+6. Firmware-Update. (Werksreset umgesetzt: `FactoryReset`, GUI „Zurücksetzen“, `axisctl reset`; an echter Kamera ungetestet.) (NTP über `ntp.cgi` ist umgesetzt, an P3225-VE Mk II noch ungetestet.)
 7. Übersetzung (gettext) – derzeit nur Deutsch.
 8. –

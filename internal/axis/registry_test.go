@@ -57,12 +57,12 @@ func TestLockedStatus(t *testing.T) {
 	r := NewRegistry()
 	yes := true
 	r.Update(Device{Serial: "ACCC8E000002", IP: "10.0.0.6", Online: true, Locked: &yes})
-	if s := r.Get("ACCC8E000002").Status(); s != "Gesperrt" {
+	if s := r.Get("ACCC8E000002").Status(); s != "Nicht angemeldet" {
 		t.Fatalf("Status = %s", s)
 	}
 	r.Update(Device{Serial: "ACCC8E000002", Unlocked: true, Online: true})
 	r.Update(Device{Serial: "ACCC8E000002", IP: "10.0.0.6", Online: true, Locked: &yes}) // erneute Anreicherung
-	if s := r.Get("ACCC8E000002").Status(); s != "OK" {
+	if s := r.Get("ACCC8E000002").Status(); s != "Angemeldet" {
 		t.Fatalf("Status nach Entsperren = %s", s)
 	}
 }
@@ -75,5 +75,38 @@ func TestStateFromLinkLocalIgnored(t *testing.T) {
 	d := r.Get("ACCC8E000003")
 	if d.Connection() != "HTTPS" || d.IsLocked() {
 		t.Fatalf("Zustand der Link-Local-Adresse übernommen: %s, gesperrt=%v", d.Connection(), d.IsLocked())
+	}
+}
+
+func TestAuthStatus(t *testing.T) {
+	r := NewRegistry()
+	no := false
+	ch := r.Update(Device{Serial: "ACCC8E000001", IP: "10.0.0.5", Online: true, NeedsSetup: &no, Locked: &no})
+	d := r.Get(ch.Key)
+	if got := d.Status(); got != "Nicht angemeldet" {
+		t.Fatalf("ungeprüft: %q", got)
+	}
+	r.Update(Device{Serial: "ACCC8E000001", IP: "10.0.0.5", Online: true, AuthFailed: true})
+	if got := d.Status(); got != "Passwort falsch" {
+		t.Fatalf("abgelehnt: %q", got)
+	}
+	r.Update(Device{Serial: "ACCC8E000001", IP: "10.0.0.5", Online: true}) // erneute Suche ändert nichts
+	if got := d.Status(); got != "Passwort falsch" {
+		t.Fatalf("nach Suche: %q", got)
+	}
+	r.Update(Device{Serial: "ACCC8E000001", IP: "10.0.0.5", Online: true, Unlocked: true})
+	if got := d.Status(); got != "Angemeldet" || d.AuthFailed {
+		t.Fatalf("angemeldet: %q", got)
+	}
+}
+
+// Konfigurierter Hostname hat Vorrang vor dem mDNS-Namen älterer Firmware.
+func TestHostnamePriority(t *testing.T) {
+	r := NewRegistry()
+	ch := r.Update(Device{Serial: "ACCC8E000009", IP: "10.0.0.9", Online: true, Hostname: "axis-accc8e000009"})
+	r.Update(Device{Serial: "ACCC8E000009", IP: "10.0.0.9", Online: true, Hostname: "kamera-09", HostnameSet: true})
+	r.Update(Device{Serial: "ACCC8E000009", IP: "10.0.0.9", Online: true, Hostname: "axis-accc8e000009"})
+	if h := r.Get(ch.Key).Hostname; h != "kamera-09" {
+		t.Fatalf("Hostname = %q", h)
 	}
 }

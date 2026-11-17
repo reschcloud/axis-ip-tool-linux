@@ -83,7 +83,7 @@ func (d *discoverer) enrich(dev Device) {
 	ctx, cancel := context.WithTimeout(d.ctx, 6*time.Second)
 	defer cancel()
 	c := NewClient(dev.IP, dev.Port, "", "")
-	upd := Device{Serial: dev.Serial, IP: dev.IP, Port: dev.Port, Online: true, Source: dev.Source}
+	upd := Device{Serial: dev.Serial, IP: dev.IP, Port: dev.Port, Online: true, Source: dev.Source, Enriched: true}
 	info, err := c.BasicInfo(ctx)
 	if err == nil {
 		upd.Model, upd.Firmware = info.Model, info.Firmware
@@ -197,7 +197,8 @@ func (d *discoverer) avahiResolve(server dbus.BusObject, iface int32, name, typ,
 		return // lokal veröffentlichte Dienste auf lo ignorieren
 	}
 	label, mac := splitServiceName(name)
-	dev := Device{IP: addr, Port: int(port), Name: label, Online: true, Source: "mDNS"}
+	dev := Device{IP: addr, Port: int(port), Name: label, Online: true, Source: "mDNS",
+		Hostname: strings.TrimSuffix(strings.TrimSuffix(host, "."), ".local")}
 	for _, t := range txt {
 		if k, v, ok := strings.Cut(string(t), "="); ok && strings.EqualFold(k, "macaddress") {
 			dev.Serial = NormMAC(v)

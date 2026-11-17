@@ -33,8 +33,8 @@ type BatchSettings struct {
 	Gateway    string
 	DNS        []string // leer = DNS-Einstellung nicht ändern (bei DHCP: per DHCP)
 
-	HostnamePattern string // z. B. "kamera-{nr:02}"; leer = Hostname nicht ändern
-	FirstNumber     int    // Startwert für {nr}
+	HostnamePattern string // z. B. "kamera-##" (# Nummer, @ letzte IP-Zahl); leer = nicht ändern
+	FirstNumber     int    // Startwert für #
 
 	TimeZone string // leer = nicht ändern
 	SetNTP   bool
@@ -48,6 +48,8 @@ type Assignment struct {
 	Device   Device
 	IP       string // neue statische IPv4 ("" bei DHCP oder ohne Netzwerkänderung)
 	Hostname string // neuer Hostname ("" = unverändert)
+	User     string // eigene, bereits geprüfte Zugangsdaten dieses Geräts ("" = die aus BatchSettings)
+	Password string
 	Problems []string
 }
 
@@ -117,7 +119,11 @@ func PlanBatch(devs []Device, s BatchSettings, all []Device) ([]Assignment, erro
 
 	if s.HostnamePattern != "" {
 		for i := range as {
-			as[i].Hostname = ExpandHostname(s.HostnamePattern, s.FirstNumber+i, as[i].Device, as[i].IP)
+			ip := as[i].IP
+			if ip == "" { // keine neue feste Adresse → @ aus der bisherigen
+				ip = as[i].Device.IP
+			}
+			as[i].Hostname = ExpandHostname(s.HostnamePattern, s.FirstNumber+i, ip)
 		}
 	}
 	CheckAssignments(as, s, all)
@@ -137,28 +143,23 @@ func isNetOrBroadcast(ip netip.Addr, pfx netip.Prefix) bool {
 	return ip == netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
 }
 
-var placeholderRe = regexp.MustCompile(`\{(nr|serial|ip)(?::(\d+))?\}`)
+var hashRe = regexp.MustCompile(`#+`)
 
-// ExpandHostname ersetzt {nr}, {nr:03} (mit führenden Nullen), {serial} und {ip}
-// (letzte Stelle der neuen IP) und macht daraus einen gültigen Hostnamen.
-func ExpandHostname(pattern string, nr int, d Device, ip string) string {
-	s := placeholderRe.ReplaceAllStringFunc(pattern, func(m string) string {
-		p := placeholderRe.FindStringSubmatch(m)
-		switch p[1] {
-		case "nr":
-			if w, _ := strconv.Atoi(p[2]); w > 0 {
-				return fmt.Sprintf("%0*d", w, nr)
-			}
-			return strconv.Itoa(nr)
-		case "serial":
-			return strings.ToLower(d.Serial)
-		case "ip":
-			if a, err := netip.ParseAddr(ip); err == nil && a.Is4() {
-				return strconv.Itoa(int(a.As4()[3]))
-			}
-		}
-		return ""
+// ExpandHostname bildet einen Hostnamen aus dem Muster:
+//
+//	#   fortlaufende Nummer; mehrere # = Mindeststellen mit führenden Nullen (## → 01, 02 …)
+//	@   letzte Zahl der IPv4-Adresse (10.0.0.20 → 20)
+//
+// Der Rest ist fester Text; Großbuchstaben, Leerzeichen, „_“ und Umlaute werden angepasst.
+func ExpandHostname(pattern string, nr int, ip string) string {
+	s := hashRe.ReplaceAllStringFunc(pattern, func(m string) string {
+		return fmt.Sprintf("%0*d", len(m), nr)
 	})
+	octet := ""
+	if a, err := netip.ParseAddr(ip); err == nil && a.Is4() {
+		octet = strconv.Itoa(int(a.As4()[3]))
+	}
+	s = strings.ReplaceAll(s, "@", octet)
 	s = strings.ToLower(strings.TrimSpace(s))
 	s = strings.NewReplacer(" ", "-", "_", "-", "ä", "ae", "ö", "oe", "ü", "ue", "ß", "ss").Replace(s)
 	return s
@@ -416,16 +417,26 @@ func configureOne(ctx context.Context, a Assignment, s BatchSettings, step func(
 	if err != nil {
 		return fmt.Errorf("nicht erreichbar: %w", err)
 	}
+	user, pass := s.User, s.Password
+	if a.User != "" && !needs {
+		user, pass = a.User, a.Password
+	}
 	if needs {
 		if !s.InitPassword {
 			return errors.New("Werkszustand – kein Erstpasswort angefordert")
+		}
+		if s.User == "" || s.Password == "" {
+			return errors.New("Werkszustand – kein Benutzer/Passwort für das Erstpasswort angegeben")
 		}
 		step("Erstpasswort")
 		if err := anon.CreateInitialUser(ctx, s.User, s.Password); err != nil {
 			return fmt.Errorf("Erstpasswort: %w", err)
 		}
 	}
-	c := NewClient(d.IP, d.Port, s.User, s.Password)
+	if user == "" || pass == "" {
+		return errors.New("keine Zugangsdaten für dieses Gerät")
+	}
+	c := NewClient(d.IP, d.Port, user, pass)
 	step("Anmeldung")
 	if err := c.CheckLogin(ctx); err != nil {
 		return fmt.Errorf("Anmeldung: %w", err)

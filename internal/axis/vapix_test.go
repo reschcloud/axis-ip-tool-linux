@@ -21,12 +21,15 @@ import (
 
 // fakeCamera simuliert die benötigten VAPIX-Endpunkte inkl. Digest-Auth.
 type fakeCamera struct {
-	mu       sync.Mutex
-	users    map[string]string
-	calls    []string
-	jsonBody []map[string]any
-	locked   bool // basicdeviceinfo nur mit Anmeldung (AXIS OS 12 nach Einrichtung)
-	ntp      map[string]any
+	mu                 sync.Mutex
+	users              map[string]string
+	calls              []string
+	jsonBody           []map[string]any
+	locked             bool // basicdeviceinfo nur mit Anmeldung (AXIS OS 12 nach Einrichtung)
+	legacy             bool // alte Firmware: kein systemready.cgi, pwdgrp.cgi im Werkszustand offen
+	hostname           string
+	ignoreJSONHostname bool // wie manche AXIS OS 9: setHostnameConfiguration ohne Wirkung
+	ntp                map[string]any
 }
 
 func md5hex(s string) string { h := md5.Sum([]byte(s)); return hex.EncodeToString(h[:]) }
@@ -51,8 +54,18 @@ func (f *fakeCamera) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, r.Method+" "+r.URL.Path)
-	open := (r.URL.Path == "/axis-cgi/basicdeviceinfo.cgi" && !f.locked) ||
-		(r.URL.Path == "/axis-cgi/pwdgrp.cgi" && len(f.users) == 0)
+	if r.URL.Path == "/axis-cgi/systemready.cgi" && !f.legacy {
+		needs := "no"
+		if len(f.users) == 0 {
+			needs = "yes"
+		}
+		io.WriteString(w, `{"apiVersion":"1.4","method":"systemready","data":{"systemready":"yes","needsetup":"`+needs+`"}}`)
+		return
+	}
+	// AXIS OS 11: pwdgrp.cgi?action=get verlangt auch im Werkszustand eine Anmeldung,
+	// Anlegen per POST geht ohne.
+	pwdgrpOpen := r.URL.Path == "/axis-cgi/pwdgrp.cgi" && len(f.users) == 0 && (f.legacy || r.Method == http.MethodPost)
+	open := (r.URL.Path == "/axis-cgi/basicdeviceinfo.cgi" && !f.locked) || pwdgrpOpen
 	if !open && !f.authorized(r) {
 		w.Header().Add("WWW-Authenticate", `Basic realm="AXIS_TEST"`)
 		w.Header().Add("WWW-Authenticate", `Digest realm="AXIS_TEST", nonce="abc123", algorithm=MD5, qop="auth"`)
@@ -76,8 +89,11 @@ func (f *fakeCamera) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
 		json.Unmarshal(body, &req)
 		f.jsonBody = append(f.jsonBody, req)
+		if req["method"] == "setHostnameConfiguration" && !f.ignoreJSONHostname {
+			f.hostname = req["params"].(map[string]any)["staticHostname"].(string)
+		}
 		if req["method"] == "getNetworkInfo" {
-			io.WriteString(w, `{"data":{"system":{"hostname":{"useDhcpHostname":false,"staticHostname":"cam1"},
+			io.WriteString(w, `{"data":{"system":{"hostname":{"useDhcpHostname":false,"staticHostname":"`+f.hostname+`"},
 			  "resolver":{"useDhcpResolverInfo":true,"nameServers":["10.0.0.1"]}},
 			  "devices":[{"name":"eth0","IPv4":{"configurationMode":"static","staticDefaultRouter":"10.0.0.1",
 			  "staticAddressConfigurations":[{"address":"10.0.0.50","prefixLength":24}]}}]}}`)
@@ -100,7 +116,17 @@ func (f *fakeCamera) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Write([]byte{0xFF, 0xD8, 0xFF, 0xE0, 0, 0})
+	case "/axis-cgi/factorydefault.cgi", "/axis-cgi/hardfactorydefault.cgi":
+		f.users = map[string]string{}
+		io.WriteString(w, "OK")
 	case "/axis-cgi/param.cgi":
+		if q := r.URL.Query(); q.Get("action") == "update" {
+			if h := q.Get("Network.HostName"); h != "" {
+				f.hostname = h
+			}
+			io.WriteString(w, "OK")
+			return
+		}
 		io.WriteString(w, "root.Brand.Brand=AXIS\n")
 	case "/axis-cgi/time.cgi":
 		io.WriteString(w, `{"error":{"code":2002,"message":"Invalid time zone"}}`)
@@ -110,7 +136,7 @@ func (f *fakeCamera) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func startFake(t *testing.T) (*fakeCamera, string, int) {
-	f := &fakeCamera{users: map[string]string{}}
+	f := &fakeCamera{users: map[string]string{}, hostname: "cam1"}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	host, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
@@ -321,5 +347,74 @@ func TestHTTPFallbackAndHTTPSOnly(t *testing.T) {
 	no := false
 	if s := (Device{IP: host, Online: true, HTTPS: &no}).Status(); s != "Kein HTTPS" {
 		t.Fatalf("Status = %s", s)
+	}
+}
+
+// Werkszustand bei AXIS OS 11 (systemready) und alter Firmware (pwdgrp-Heuristik).
+func TestNeedsInitialUser(t *testing.T) {
+	ctx := context.Background()
+	for _, legacy := range []bool{false, true} {
+		f, host, port := startFake(t)
+		f.legacy = legacy
+		anon := NewClient(host, port, "", "")
+		if needs, err := anon.NeedsInitialUser(ctx); err != nil || !needs {
+			t.Fatalf("legacy=%v: Werkszustand nicht erkannt: %v, %v", legacy, needs, err)
+		}
+		if err := NewClient(host, port, "root", "egal1234").CheckLogin(ctx); !errors.Is(err, ErrNoUser) {
+			t.Fatalf("legacy=%v: CheckLogin im Werkszustand = %v", legacy, err)
+		}
+		if err := anon.CreateInitialUser(ctx, "admin", "geheim123"); err != nil {
+			t.Fatalf("legacy=%v: %v", legacy, err)
+		}
+		if needs, err := anon.NeedsInitialUser(ctx); err != nil || needs {
+			t.Fatalf("legacy=%v: nach Setup = %v, %v", legacy, needs, err)
+		}
+		if err := anon.CreateInitialUser(ctx, "admin2", "geheim123"); !errors.Is(err, ErrHasUser) {
+			t.Fatalf("legacy=%v: zweites Erstpasswort = %v", legacy, err)
+		}
+		if err := NewClient(host, port, "admin", "falsch").CheckLogin(ctx); err != ErrAuth {
+			t.Fatalf("legacy=%v: falsches Passwort = %v", legacy, err)
+		}
+		if err := NewClient(host, port, "admin", "geheim123").CheckLogin(ctx); err != nil {
+			t.Fatalf("legacy=%v: richtiges Passwort = %v", legacy, err)
+		}
+	}
+}
+
+func TestFactoryReset(t *testing.T) {
+	ctx := context.Background()
+	_, host, port := startFake(t)
+	anon := NewClient(host, port, "", "")
+	if err := anon.CreateInitialUser(ctx, "root", "geheim123"); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewClient(host, port, "root", "falsch").FactoryReset(ctx, true); !errors.Is(err, ErrAuth) {
+		t.Fatalf("Reset mit falschem Passwort = %v", err)
+	}
+	if err := NewClient(host, port, "root", "geheim123").FactoryReset(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if needs, err := anon.NeedsInitialUser(ctx); err != nil || !needs {
+		t.Fatalf("nach Reset kein Werkszustand: %v, %v", needs, err)
+	}
+}
+
+// AXIS OS 9: Hostname über network_settings.cgi ohne Wirkung → Rückfall auf param.cgi.
+func TestHostnameFallback(t *testing.T) {
+	ctx := context.Background()
+	f, host, port := startFake(t)
+	f.users["root"] = "geheim123"
+	f.ignoreJSONHostname = true
+	c := NewClient(host, port, "root", "geheim123")
+	cfg, err := c.GetNetwork(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Hostname = "kamera-09"
+	if err := c.SetNetwork(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if f.hostname != "kamera-09" {
+		t.Fatalf("Hostname = %q", f.hostname)
 	}
 }

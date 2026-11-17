@@ -31,8 +31,9 @@ Netzwerk (weglassen = unverändert):
   -order serial|ip|name   Reihenfolge der Adressvergabe (Standard serial)
   -csv PLAN               Zuordnung aus CSV: Seriennummer;IP;Hostname (überschreibt -ip/-hostname)
 Hostname, Zeit:
-  -hostname MUSTER        z. B. kamera-{nr:02}, cam-{serial}, cam-{ip}
-  -nr 1                   Startwert für {nr}
+  -hostname MUSTER        # = fortlaufende Nummer (## → 01, 02 …), @ = letzte Zahl der IP,
+                          z. B. kamera-## oder cam-@
+  -nr 1                   Startwert für #
   -tz Europe/Vienna       Zeitzone
   -ntp dhcp|off|S1,S2     NTP
 Ablauf:

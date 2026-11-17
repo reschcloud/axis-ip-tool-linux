@@ -15,7 +15,7 @@ func TestPlanBatchIPs(t *testing.T) {
 	devs := []Device{dev("ACCC8E000003", "169.254.1.3"), dev("ACCC8E000001", "169.254.1.1"), dev("ACCC8E000002", "169.254.1.2")}
 	other := dev("B8A44F000009", "10.0.0.11") // fremdes Gerät mitten im Bereich
 	s := BatchSettings{SetNetwork: true, StartIP: "10.0.0.10", Prefix: 24, Gateway: "10.0.0.12",
-		HostnamePattern: "Kamera_{nr:02}-{ip}", FirstNumber: 1}
+		HostnamePattern: "Kamera_##-@", FirstNumber: 1}
 	as, err := PlanBatch(devs, s, append(devs, other))
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestRunBatch(t *testing.T) {
 
 	s := BatchSettings{User: "root", Password: "geheim123", InitPassword: true,
 		SetNetwork: true, StartIP: "10.0.0.20", Prefix: 24, Gateway: "10.0.0.1", DNS: []string{"10.0.0.1"},
-		HostnamePattern: "cam-{nr}", FirstNumber: 1, SetNTP: true, NTP: NTPConfig{Enabled: true, Servers: []string{"pool.ntp.org"}}}
+		HostnamePattern: "cam-#", FirstNumber: 1, SetNTP: true, NTP: NTPConfig{Enabled: true, Servers: []string{"pool.ntp.org"}}}
 	as, err := PlanBatch([]Device{d2, d1}, s, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -145,5 +145,25 @@ func TestRunBatch(t *testing.T) {
 	WriteResultsCSV(&buf, res)
 	if !strings.Contains(buf.String(), "ACCC8E000001;;"+h1+";10.0.0.20;cam-1;OK") {
 		t.Errorf("Protokoll:\n%s", buf.String())
+	}
+}
+
+// Angemeldete Geräte verwenden ihre eigenen Zugangsdaten, ohne gemeinsames Passwort.
+func TestRunBatchOwnCredentials(t *testing.T) {
+	ctx := context.Background()
+	f, host, port := startFake(t)
+	f.users["admin"] = "eigenes123"
+	d := Device{Serial: "ACCC8E112233", IP: host, Port: port, Online: true}
+	s := BatchSettings{HostnamePattern: "cam-#", FirstNumber: 1}
+	as, err := PlanBatch([]Device{d}, s, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := RunBatch(ctx, as, s, func(BatchEvent) {}); res[0].Err == nil {
+		t.Fatal("ohne Zugangsdaten erfolgreich?")
+	}
+	as[0].User, as[0].Password = "admin", "eigenes123"
+	if res := RunBatch(ctx, as, s, func(BatchEvent) {}); res[0].Err != nil {
+		t.Fatalf("mit eigenen Zugangsdaten: %v", res[0].Err)
 	}
 }

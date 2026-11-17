@@ -24,6 +24,12 @@ import (
 // ErrAuth: Zugangsdaten fehlen, sind falsch oder haben keine Admin-Rechte.
 var ErrAuth = errors.New("Benutzername oder Passwort falsch")
 
+// ErrHasUser: Erstpasswort unmöglich, das Gerät hat schon einen Benutzer.
+var ErrHasUser = errors.New("Gerät hat bereits einen Benutzer – Passwort nur mit Anmeldung (Weboberfläche) änderbar")
+
+// ErrNoUser: Anmeldung unmöglich, weil das Gerät noch im Werkszustand ist (ist auch ErrAuth).
+var ErrNoUser = fmt.Errorf("%w: Gerät hat noch keinen Benutzer – zuerst ein Passwort setzen", ErrAuth)
+
 // ErrNotSupported: Das Gerät kennt die (neue) API nicht.
 var ErrNotSupported = errors.New("von der Firmware nicht unterstützt")
 
@@ -312,6 +318,19 @@ func (c *Client) params(ctx context.Context, groups string) (map[string]string, 
 // NeedsInitialUser: Gerät im Werkszustand (noch kein Benutzer angelegt)?
 // Heuristik wie in der AXIS IP Utility: pwdgrp.cgi antwortet dann ohne Anmeldung.
 func (c *Client) NeedsInitialUser(ctx context.Context) (bool, error) {
+	// systemready.cgi meldet den Werkszustand ausdrücklich („needsetup“) und braucht keine
+	// Anmeldung. Wichtig: AXIS OS 11 beantwortet pwdgrp.cgi auch im Werkszustand mit 401.
+	var ready struct {
+		NeedSetup string `json:"needsetup"`
+	}
+	err := c.jsonCall(ctx, "systemready.cgi", "systemready", map[string]any{"timeout": 5}, false, &ready)
+	if err == nil && (ready.NeedSetup == "yes" || ready.NeedSetup == "no") {
+		return ready.NeedSetup == "yes", nil
+	}
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	// Ältere Firmware: Heuristik wie in der AXIS IP Utility
 	code, _, err := c.do(ctx, http.MethodGet, "/axis-cgi/pwdgrp.cgi?action=get", nil, "", false)
 	if errors.Is(err, ErrAuth) {
 		return false, nil
@@ -322,9 +341,30 @@ func (c *Client) NeedsInitialUser(ctx context.Context) (bool, error) {
 	return code == http.StatusOK, nil
 }
 
-// CheckLogin prüft die Zugangsdaten.
+// CheckLogin prüft die Zugangsdaten (Administrator). pwdgrp.cgi verlangt immer eine
+// Admin-Anmeldung – anders als param.cgi/basicdeviceinfo.cgi, die bei anonymem Zugriff
+// auch mit falschem Passwort antworten können.
 func (c *Client) CheckLogin(ctx context.Context) error {
-	_, _, err := c.do(ctx, http.MethodGet, "/axis-cgi/param.cgi?action=list&group=Brand", nil, "", true)
+	if c.user == "" {
+		return ErrAuth
+	}
+	code, _, err := c.do(ctx, http.MethodGet, "/axis-cgi/pwdgrp.cgi?action=get", nil, "", true)
+	if errors.Is(err, ErrNotSupported) {
+		code, _, err = c.do(ctx, http.MethodGet, "/axis-cgi/param.cgi?action=list&group=Brand", nil, "", true)
+	}
+	c.mu.Lock()
+	asked := c.chal != nil
+	c.mu.Unlock()
+	if err == nil && !asked && code == http.StatusOK {
+		// Ohne Anmeldung beantwortet → Werkszustand, Zugangsdaten nicht prüfbar
+		return ErrNoUser
+	}
+	if errors.Is(err, ErrAuth) {
+		// Abgelehnt – liegt es am Passwort oder am Werkszustand?
+		if needs, e := NewClient(c.host, c.port, "", "").NeedsInitialUser(ctx); e == nil && needs {
+			return ErrNoUser
+		}
+	}
 	return err
 }
 
@@ -340,6 +380,9 @@ func (c *Client) CreateInitialUser(ctx context.Context, user, pass string) error
 		"sgrp": {"admin:operator:viewer:ptz"}}
 	_, data, err := c.do(ctx, http.MethodPost, "/axis-cgi/pwdgrp.cgi", []byte(form.Encode()),
 		"application/x-www-form-urlencoded", false)
+	if errors.Is(err, ErrAuth) {
+		return ErrHasUser
+	}
 	if err != nil {
 		return err
 	}
@@ -518,8 +561,7 @@ func (c *Client) SetNetwork(ctx context.Context, cfg NetworkConfig) error {
 	if cfg.Legacy {
 		return c.setNetworkLegacy(ctx, cfg)
 	}
-	if err := c.jsonCall(ctx, "network_settings.cgi", "setHostnameConfiguration", map[string]any{
-		"useDhcpHostname": cfg.HostnameFromDHCP, "staticHostname": cfg.Hostname}, true, nil); err != nil {
+	if err := c.setHostname(ctx, cfg); err != nil {
 		return err
 	}
 	res := map[string]any{"useDhcpResolverInfo": cfg.DNSFromDHCP}
@@ -536,6 +578,62 @@ func (c *Client) SetNetwork(ctx context.Context, cfg NetworkConfig) error {
 		p["staticAddressConfigurations"] = []map[string]any{{"address": cfg.Address, "prefixLength": cfg.Prefix}}
 	}
 	return ignoreDisconnect(c.jsonCall(ctx, "network_settings.cgi", "setIPv4AddressConfiguration", p, true, nil))
+}
+
+// setHostname setzt den Hostnamen und prüft, ob das Gerät ihn übernommen hat. Einige
+// AXIS-OS-9-Versionen kennen setHostnameConfiguration nicht oder übernehmen es nicht –
+// dann wird es über param.cgi versucht.
+func (c *Client) setHostname(ctx context.Context, cfg NetworkConfig) error {
+	err := c.jsonCall(ctx, "network_settings.cgi", "setHostnameConfiguration", map[string]any{
+		"useDhcpHostname": cfg.HostnameFromDHCP, "staticHostname": cfg.Hostname}, true, nil)
+	if err == nil && c.hostnameApplied(ctx, cfg) {
+		return nil
+	}
+	if errors.Is(err, ErrAuth) {
+		return err
+	}
+	if perr := c.setHostnameParam(ctx, cfg); perr != nil {
+		if err != nil {
+			return fmt.Errorf("Hostname: %w", err)
+		}
+		return fmt.Errorf("Hostname: %w", perr)
+	}
+	if !c.hostnameApplied(ctx, cfg) {
+		return fmt.Errorf("Gerät hat den Hostnamen %q nicht übernommen", cfg.Hostname)
+	}
+	return nil
+}
+
+// hostnameApplied liest den Hostnamen zurück (nicht lesbar = als übernommen werten).
+func (c *Client) hostnameApplied(ctx context.Context, cfg NetworkConfig) bool {
+	if cfg.HostnameFromDHCP {
+		return true
+	}
+	got, err := c.GetNetwork(ctx)
+	return err != nil || strings.EqualFold(got.Hostname, cfg.Hostname)
+}
+
+func (c *Client) setHostnameParam(ctx context.Context, cfg NetworkConfig) error {
+	q := url.Values{
+		"action":           {"update"},
+		"Network.HostName": {cfg.Hostname},
+		"Network.VolatileHostName.ObtainFromDHCP": {yesNo(cfg.HostnameFromDHCP)},
+	}
+	_, data, err := c.do(ctx, http.MethodGet, "/axis-cgi/param.cgi?"+q.Encode(), nil, "", true)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(strings.ToLower(string(data)), "error") {
+		return errors.New(strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
 }
 
 func (c *Client) getNetworkLegacy(ctx context.Context) (NetworkConfig, error) {
@@ -566,18 +664,17 @@ func (c *Client) getNetworkLegacy(ctx context.Context) (NetworkConfig, error) {
 }
 
 func (c *Client) setNetworkLegacy(ctx context.Context, cfg NetworkConfig) error {
-	yn := func(b bool) string {
-		if b {
-			return "yes"
-		}
-		return "no"
+	// Hostname zuerst und einzeln, damit er geprüft werden kann, bevor sich die IP ändert
+	if err := c.setHostnameParam(ctx, cfg); err != nil {
+		return fmt.Errorf("Hostname: %w", err)
+	}
+	if !c.hostnameApplied(ctx, cfg) {
+		return fmt.Errorf("Gerät hat den Hostnamen %q nicht übernommen", cfg.Hostname)
 	}
 	q := url.Values{
-		"action":           {"update"},
-		"Network.HostName": {cfg.Hostname},
-		"Network.VolatileHostName.ObtainFromDHCP": {yn(cfg.HostnameFromDHCP)},
-		"Network.Resolver.ObtainFromDHCP":         {yn(cfg.DNSFromDHCP)},
-		"Network.BootProto":                       {map[bool]string{true: "dhcp", false: "none"}[cfg.DHCP]},
+		"action":                          {"update"},
+		"Network.Resolver.ObtainFromDHCP": {yesNo(cfg.DNSFromDHCP)},
+		"Network.BootProto":               {map[bool]string{true: "dhcp", false: "none"}[cfg.DHCP]},
 	}
 	for i, k := range []string{"Network.Resolver.NameServer1", "Network.Resolver.NameServer2"} {
 		v := ""
@@ -764,6 +861,19 @@ func isJPEG(b []byte) bool { return len(b) > 3 && b[0] == 0xFF && b[1] == 0xD8 }
 // Restart startet das Gerät neu.
 func (c *Client) Restart(ctx context.Context) error {
 	_, _, err := c.do(ctx, http.MethodGet, "/axis-cgi/restart.cgi", nil, "", true)
+	return ignoreDisconnect(err)
+}
+
+// FactoryReset setzt das Gerät auf Werkseinstellungen zurück (Benutzer, Passwörter und alle
+// Einstellungen) und startet es neu. keepNetwork behält die IP-Einstellungen
+// (factorydefault.cgi); sonst wird alles zurückgesetzt (hardfactorydefault.cgi) – das Gerät
+// holt sich danach per DHCP eine Adresse bzw. nimmt 192.168.0.90.
+func (c *Client) FactoryReset(ctx context.Context, keepNetwork bool) error {
+	path := "/axis-cgi/hardfactorydefault.cgi"
+	if keepNetwork {
+		path = "/axis-cgi/factorydefault.cgi"
+	}
+	_, _, err := c.do(ctx, http.MethodGet, path, nil, "", true)
 	return ignoreDisconnect(err)
 }
 

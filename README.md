@@ -17,6 +17,7 @@ Kein offizielles Produkt der Axis Communications AB.
 | Vorschaubild | `jpg/image.cgi` (1 Bild/s) |
 | Mehrere Geräte auf einmal | Passwort, fortlaufende IPs, Hostname-Muster, Zeit/NTP; CSV-Plan; Protokoll |
 | Webseite öffnen, Neustart | Standardbrowser, `restart.cgi` |
+| Werkseinstellungen (wahlweise mit IP) | `factorydefault.cgi` / `hardfactorydefault.cgi` |
 
 ## Installation
 
@@ -79,9 +80,10 @@ axisctl list                                   # Geräte suchen
 axisctl init 192.168.0.90                      # ersten Admin anlegen
 axisctl net 192.168.0.90 -ip 10.0.0.20/24 -gw 10.0.0.1 -hostname kamera-hof
 axisctl time 192.168.0.90 -tz Europe/Vienna -ntp pool.ntp.org
+axisctl reset 192.168.0.90                     # Werkseinstellungen (IP bleibt; -all: auch IP)
 
 # Mehrere Kameras: fortlaufende IPs ab .20, Hostnamen kamera-01, kamera-02 …
-axisctl batch -init -ip 10.0.0.20/24 -gw 10.0.0.1 -hostname 'kamera-{nr:02}' \
+axisctl batch -init -ip 10.0.0.20/24 -gw 10.0.0.1 -hostname 'kamera-##' \
               -ntp pool.ntp.org ACCC8E000001 ACCC8E000002 ACCC8E000003
 axisctl batch -ip 10.0.0.1/24 -csv plan.csv -dry-run   # Zuordnung aus CSV, nur anzeigen
 ```
@@ -92,6 +94,10 @@ In der Liste mehrere Geräte auswählen (Strg/Umschalt + Klick, Strg+A) → **Me
 Ein Assistent fragt die gemeinsamen Einstellungen ab, zeigt eine Vorschau mit den geplanten
 Adressen und Hostnamen (einzeln änderbar, Konflikte werden markiert) und konfiguriert die Geräte
 nacheinander. Am Ende lässt sich ein Protokoll als CSV speichern.
+
+Hostnamen: fester Text plus `#` für eine fortlaufende Nummer (`kamera-##` → kamera-01,
+kamera-02 …, Startwert einstellbar) und/oder `@` für die letzte Zahl der IP-Adresse
+(`cam-@` → cam-20 bei 10.0.0.20).
 
 Statt eines Adressbereichs kann eine **CSV-Datei** die Zuordnung vorgeben (Trennzeichen `;`, `,`
 oder Tab, Kopfzeile optional):

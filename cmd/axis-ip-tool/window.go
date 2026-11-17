@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ type column struct {
 
 var columns = []column{
 	{"Name", true, func(d *axis.Device) string { return d.Name }, nil},
+	{"Hostname", false, func(d *axis.Device) string { return d.Hostname }, nil},
 	{"IP-Adresse", false, func(d *axis.Device) string { return d.IP }, func(a, b *axis.Device) bool { return axis.IPLess(a.IP, b.IP) }},
 	{"Seriennummer", false, func(d *axis.Device) string { return d.Serial }, nil},
 	{"Modell", true, func(d *axis.Device) string { return d.Model }, nil},
@@ -43,6 +45,7 @@ var columns = []column{
 
 // Indizes besonderer Spalten in columns
 var (
+	ipColumn     = 2
 	connColumn   = len(columns) - 2
 	statusColumn = len(columns) - 1
 )
@@ -51,9 +54,11 @@ type window struct {
 	*adw.ApplicationWindow
 	app *adw.Application
 
-	reg   *axis.Registry // nur im GTK-Thread verwenden
-	creds map[string][2]string
-	cells map[string][]*gtk.Label // gebundene Zellen je Gerät, für Live-Updates
+	reg        *axis.Registry // nur im GTK-Thread verwenden
+	creds      map[string][2]string
+	lastUser   string                  // zuletzt eingegebener Benutzername (Vorbelegung)
+	lastForAll bool                    // „auch bei allen anderen“ zuletzt gewählt
+	cells      map[string][]*gtk.Label // gebundene Zellen je Gerät, für Live-Updates
 
 	keys      *gtk.StringList
 	filter    *gtk.CustomFilter
@@ -64,7 +69,9 @@ type window struct {
 	buttons   map[string]*gtk.Button
 
 	cancelScan  context.CancelFunc
-	infoPending map[string]bool // laufende Abfragen von Modell/Firmware mit Anmeldung
+	infoPending map[string]bool         // laufende Anmeldeprüfungen (Statusspalte zeigt Spinner)
+	spin        map[string]*gtk.Spinner // Spinner der Statuszelle je Gerät
+	statusParts map[uintptr]statusPart  // Statuszellen-Box → Inhalt
 }
 
 func newWindow(app *adw.Application) *window {
@@ -76,6 +83,8 @@ func newWindow(app *adw.Application) *window {
 		cells:             map[string][]*gtk.Label{},
 		buttons:           map[string]*gtk.Button{},
 		infoPending:       map[string]bool{},
+		spin:              map[string]*gtk.Spinner{},
+		statusParts:       map[uintptr]statusPart{},
 	}
 	w.SetTitle("Axis IP Tool")
 	w.SetDefaultSize(1100, 640)
@@ -176,6 +185,7 @@ func (w *window) build() {
 		{"network", "Netzwerk", "network-wired-symbolic", false, w.onNetwork},
 		{"time", "Datum & Zeit", "preferences-system-time-symbolic", false, w.onTime},
 		{"restart", "Neustart", "system-reboot-symbolic", true, w.onRestart},
+		{"reset", "Zurücksetzen", "edit-undo-symbolic", true, w.onReset},
 		{"batch", "Mehrere konfigurieren", "view-list-bullet-symbolic", true, w.onBatch},
 	} {
 		content := adw.NewButtonContent()
@@ -193,6 +203,8 @@ func (w *window) build() {
 		w.buttons[b.key] = button
 	}
 	w.buttons["restart"].AddCSSClass("destructive-action")
+	w.buttons["reset"].AddCSSClass("destructive-action")
+	w.buttons["reset"].SetTooltipText("Auf Werkseinstellungen zurücksetzen")
 
 	tv.SetContent(w.stack)
 	tv.AddBottomBar(bar)
@@ -242,23 +254,53 @@ func (w *window) makeColumn(idx int, c column) *gtk.ColumnViewColumn {
 		l := gtk.NewLabel("")
 		l.SetXAlign(0)
 		l.SetEllipsize(pango.EllipsizeEnd)
-		if idx == statusColumn {
+		if idx == ipColumn {
+			// Doppelklick auf die IP öffnet die Weboberfläche (statt des Netzwerk-Dialogs)
+			l.SetTooltipText("Doppelklick öffnet die Weboberfläche")
 			click := gtk.NewGestureClick()
-			click.ConnectReleased(func(n int, _, _ float64) {
-				if n == 1 {
-					w.onStatusClicked(l)
+			click.ConnectPressed(func(n int, _, _ float64) {
+				if n == 2 {
+					click.SetState(gtk.EventSequenceClaimed)
+					if d := w.reg.Get(w.keyOfLabel(idx, l)); d != nil && d.IP != "" {
+						gtk.NewURILauncher(d.WebURL()).Launch(context.Background(), &w.Window, nil)
+					}
 				}
 			})
 			l.AddController(click)
 		}
-		obj.Cast().(listCell).SetChild(l)
+		if idx != statusColumn {
+			obj.Cast().(listCell).SetChild(l)
+			return
+		}
+		click := gtk.NewGestureClick()
+		click.ConnectReleased(func(n int, _, _ float64) {
+			if n == 1 {
+				w.onStatusClicked(l)
+			}
+		})
+		l.AddController(click)
+		// Statuszelle: Spinner (während Abfrage/Anmeldung) + Text
+		sp := gtk.NewSpinner()
+		sp.SetVisible(false)
+		box := gtk.NewBox(gtk.OrientationHorizontal, 6)
+		box.Append(sp)
+		box.Append(l)
+		w.statusParts[coreglib.InternObject(box).Native()] = statusPart{l, sp}
+		obj.Cast().(listCell).SetChild(box)
 	})
+	labelOf := func(cell listCell) (*gtk.Label, *gtk.Spinner) {
+		if idx == statusColumn {
+			p := w.statusParts[coreglib.InternObject(cell.Child()).Native()]
+			return p.l, p.sp
+		}
+		return cell.Child().(*gtk.Label), nil
+	}
 	f.ConnectBind(func(obj *coreglib.Object) {
 		cell := obj.Cast().(listCell)
 		key := cell.Item().Cast().(*gtk.StringObject).String()
-		l := cell.Child().(*gtk.Label)
-		if d := w.reg.Get(key); d != nil {
-			w.render(l, idx, d)
+		l, sp := labelOf(cell)
+		if sp != nil {
+			w.spin[key] = sp
 		}
 		cells := w.cells[key]
 		if len(cells) < len(columns) {
@@ -266,13 +308,28 @@ func (w *window) makeColumn(idx int, c column) *gtk.ColumnViewColumn {
 			w.cells[key] = cells
 		}
 		cells[idx] = l
+		if d := w.reg.Get(key); d != nil {
+			w.render(key, l, idx, d)
+		}
 	})
 	f.ConnectUnbind(func(obj *coreglib.Object) {
 		cell := obj.Cast().(listCell)
 		key := cell.Item().Cast().(*gtk.StringObject).String()
+		l, sp := labelOf(cell)
 		if cells := w.cells[key]; cells != nil && cells[idx] != nil &&
-			coreglib.InternObject(cells[idx]).Native() == coreglib.InternObject(cell.Child()).Native() {
+			coreglib.InternObject(cells[idx]).Native() == coreglib.InternObject(l).Native() {
 			cells[idx] = nil
+		}
+		if sp != nil && w.spin[key] == sp {
+			sp.Stop()
+			delete(w.spin, key)
+		}
+	})
+	f.ConnectTeardown(func(obj *coreglib.Object) {
+		if idx == statusColumn {
+			if c := obj.Cast().(listCell).Child(); c != nil {
+				delete(w.statusParts, coreglib.InternObject(c).Native())
+			}
 		}
 	})
 	col := gtk.NewColumnViewColumn(c.title, &f.ListItemFactory)
@@ -304,7 +361,41 @@ func keyOf(p unsafe.Pointer) string {
 	return coreglib.Take(p).Cast().(*gtk.StringObject).String()
 }
 
-func (w *window) render(l *gtk.Label, idx int, d *axis.Device) {
+// keyOfLabel liefert den Geräteschlüssel zur (gebundenen) Zelle l der Spalte idx.
+func (w *window) keyOfLabel(idx int, l *gtk.Label) string {
+	native := coreglib.InternObject(l).Native()
+	for key, cells := range w.cells {
+		if c := cells[idx]; c != nil && coreglib.InternObject(c).Native() == native {
+			return key
+		}
+	}
+	return ""
+}
+
+type statusPart struct {
+	l  *gtk.Label
+	sp *gtk.Spinner
+}
+
+// busy: für das Gerät läuft gerade eine Abfrage, deren Ergebnis den Status ändern kann.
+func (w *window) busy(key string, d *axis.Device) bool {
+	return d.Online && (!d.Enriched || w.infoPending[key])
+}
+
+// rerender aktualisiert alle sichtbaren Zellen des Geräts.
+func (w *window) rerender(key string) {
+	dev := w.reg.Get(key)
+	if dev == nil {
+		return
+	}
+	for i, l := range w.cells[key] {
+		if l != nil {
+			w.render(key, l, i, dev)
+		}
+	}
+}
+
+func (w *window) render(key string, l *gtk.Label, idx int, d *axis.Device) {
 	l.SetText(columns[idx].text(d))
 	if idx == connColumn {
 		l.RemoveCSSClass("warning")
@@ -327,18 +418,41 @@ func (w *window) render(l *gtk.Label, idx int, d *axis.Device) {
 	}
 	l.SetTooltipText("")
 	l.SetCursor(nil)
+	busy := w.busy(key, d)
+	if sp := w.spin[key]; sp != nil {
+		sp.SetVisible(busy)
+		if busy {
+			sp.Start()
+		} else {
+			sp.Stop()
+		}
+	}
 	switch {
-	case d.Status() == "OK":
-		l.AddCSSClass("success")
-		if d.Unlocked {
-			l.SetTooltipText("Angemeldet")
+	case busy:
+		l.AddCSSClass("dim-label")
+		if w.infoPending[key] {
+			l.SetText("Anmeldung wird geprüft …")
+		} else {
+			l.SetText("Wird abgefragt …")
 		}
 	case !d.Online:
 		l.AddCSSClass("dim-label")
-	case d.IsLocked():
+	case d.AuthFailed:
 		l.AddCSSClass("error")
-		l.SetText("🔑 Gesperrt")
-		l.SetTooltipText("Gerät verlangt eine Anmeldung – klicken zum Entsperren")
+		l.SetText("🔑 Passwort falsch")
+		l.SetTooltipText("Benutzername oder Passwort abgelehnt (oder keine Admin-Rechte) – klicken zum erneuten Anmelden")
+		l.SetCursorFromName("pointer")
+	case d.Status() == "Angemeldet":
+		l.AddCSSClass("success")
+		l.SetText("✓ Angemeldet")
+		l.SetTooltipText("Zugangsdaten geprüft")
+	case d.Status() == "Nicht angemeldet":
+		l.SetText("🔑 Nicht angemeldet")
+		tip := "Gerät ist eingerichtet, Passwort noch nicht eingegeben – klicken zum Anmelden"
+		if d.IsLocked() {
+			tip += "\nDas Gerät zeigt Firmware und genaues Modell erst nach der Anmeldung."
+		}
+		l.SetTooltipText(tip)
 		l.SetCursorFromName("pointer")
 	case d.NeedsSetup != nil && *d.NeedsSetup:
 		l.AddCSSClass("warning")
@@ -349,7 +463,8 @@ func (w *window) render(l *gtk.Label, idx int, d *axis.Device) {
 	}
 }
 
-// onStatusClicked: Klick auf „Gesperrt“ entsperrt, auf „Kein Passwort gesetzt“ richtet ein.
+// onStatusClicked: Klick auf „Nicht angemeldet“/„Passwort falsch“ meldet an, auf
+// „Kein Passwort gesetzt“ richtet ein.
 func (w *window) onStatusClicked(l *gtk.Label) {
 	native := coreglib.InternObject(l).Native()
 	for key, cells := range w.cells {
@@ -359,7 +474,7 @@ func (w *window) onStatusClicked(l *gtk.Label) {
 		d := w.reg.Get(key)
 		switch {
 		case d == nil || !d.Online:
-		case d.IsLocked():
+		case d.AuthFailed || d.Status() == "Nicht angemeldet":
 			w.unlock(d)
 		case d.NeedsSetup != nil && *d.NeedsSetup:
 			w.selectKey(key)
@@ -383,14 +498,13 @@ func (w *window) selectKey(key string) {
 func (w *window) unlock(d *axis.Device) {
 	key := d.Key()
 	w.selectKey(key)
-	withLogin(w, d, "Entsperren", func(ctx context.Context, c *axis.Client) (axis.Device, error) {
-		return c.BasicInfo(ctx)
+	withLogin(w, d, "Anmelden", func(ctx context.Context, c *axis.Client) (axis.Device, error) {
+		return loginInfo(ctx, c)
 	}, func(info axis.Device) {
 		if dev := w.reg.Get(key); dev != nil {
-			w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP, Port: dev.Port,
-				Model: info.Model, Firmware: info.Firmware, Unlocked: true, Online: true})
+			w.onDevice(context.Background(), asUpdate(info, dev))
 		}
-		w.toast(label(d) + " entsperrt")
+		w.toast(label(d) + ": angemeldet")
 	})
 }
 
@@ -403,7 +517,7 @@ func (w *window) matches(obj *coreglib.Object) bool {
 	if d == nil {
 		return false
 	}
-	for _, s := range []string{d.Name, d.IP, d.Serial, d.Model, d.Firmware} {
+	for _, s := range []string{d.Name, d.Hostname, d.IP, d.Serial, d.Model, d.Firmware} {
 		if strings.Contains(strings.ToLower(s), q) {
 			return true
 		}
@@ -484,6 +598,7 @@ func (w *window) rescan() {
 	w.keys.Splice(0, w.keys.NItems(), nil)
 	w.reg = axis.NewRegistry()
 	w.cells = map[string][]*gtk.Label{}
+	w.spin = map[string]*gtk.Spinner{}
 	w.updateActions()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -510,12 +625,7 @@ func (w *window) onDevice(ctx context.Context, d axis.Device) {
 	case ch.Added:
 		w.keys.Append(key)
 	}
-	dev := w.reg.Get(key)
-	for i, l := range w.cells[key] {
-		if l != nil {
-			w.render(l, i, dev)
-		}
-	}
+	w.rerender(key)
 	w.filter.Changed(gtk.FilterChangeDifferent)
 	w.updateActions()
 	w.refreshInfo(key)
@@ -526,24 +636,56 @@ func (w *window) onDevice(ctx context.Context, d axis.Device) {
 func (w *window) refreshInfo(key string) {
 	d := w.reg.Get(key)
 	c, ok := w.creds[key]
-	if !ok || d == nil || d.Unlocked || d.IP == "" || !d.Online || w.infoPending[key] {
+	// Erst nach der Abfrage durch die Suche: Die Kameras melden sich oft zuerst mit der
+	// Link-Local-Adresse, die richtige Adresse folgt Sekundenbruchteile später.
+	if !ok || d == nil || d.Unlocked || d.IP == "" || !d.Online || !d.Enriched || w.infoPending[key] {
 		return
 	}
 	w.infoPending[key] = true
+	w.rerender(key)
 	ip, port, reg := d.IP, d.Port, w.reg
 	async(func() (axis.Device, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return axis.NewClient(ip, port, c[0], c[1]).BasicInfo(ctx)
+		cl := axis.NewClient(ip, port, c[0], c[1])
+		return loginInfo(ctx, cl)
 	}, func(info axis.Device) {
 		delete(w.infoPending, key)
 		dev := reg.Get(key)
 		if reg != w.reg || dev == nil {
 			return // inzwischen neu gesucht
 		}
-		w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP, Port: dev.Port,
-			Model: info.Model, Firmware: info.Firmware, Unlocked: true, Online: true})
-	}, func(error) { delete(w.infoPending, key) })
+		w.onDevice(context.Background(), asUpdate(info, dev))
+	}, func(err error) {
+		delete(w.infoPending, key)
+		if reg != w.reg {
+			return
+		}
+		if errors.Is(err, axis.ErrAuth) {
+			w.setAuth(key, false)
+			return
+		}
+		w.rerender(key)
+		if dev := reg.Get(key); dev != nil && dev.IP != ip {
+			w.refreshInfo(key) // Adresse hat sich inzwischen geändert → dort noch einmal
+		}
+	})
+}
+
+// setAuth vermerkt, ob die Zugangsdaten für key gültig sind (Statusspalte).
+func (w *window) setAuth(key string, ok bool) {
+	dev := w.reg.Get(key)
+	if dev == nil {
+		return
+	}
+	u := axis.Device{Serial: dev.Serial, IP: dev.IP, Port: dev.Port, Online: dev.Online}
+	if ok {
+		u.Unlocked = true
+	} else {
+		u.AuthFailed = true
+		delete(w.creds, key)
+	}
+	w.onDevice(context.Background(), u)
 }
 
 // replaceKey ersetzt old in der Liste durch key oder entfernt es (key == "").

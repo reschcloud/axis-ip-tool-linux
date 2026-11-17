@@ -38,6 +38,7 @@ Befehle:
   time     <ip> [-tz Europe/Vienna] [-sync=true]
                 [-ntp dhcp|off|SERVER,SERVER]       Zeitzone/Uhrzeit/NTP setzen
   restart  <ip>                                     Neustart
+  reset    <ip> [-all] [-y]                         Werkseinstellungen (-all: auch IP-Einstellungen)
   batch    [GERÄT …] [-csv PLAN] …                  Mehrere Geräte konfigurieren (axisctl batch -h)
   version                                           Version anzeigen
 
@@ -75,6 +76,8 @@ func main() {
 		err = cmdTime(ctx, args)
 	case "restart":
 		err = cmdRestart(ctx, args)
+	case "reset":
+		err = cmdReset(ctx, args)
 	case "batch":
 		err = cmdBatch(ctx, args)
 	case "version", "--version":
@@ -101,9 +104,9 @@ func cmdList(ctx context.Context, args []string) error {
 		return err
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tIP\tSERIENNUMMER\tMODELL\tFIRMWARE\tVERBINDUNG\tSTATUS")
+	fmt.Fprintln(tw, "NAME\tHOSTNAME\tIP\tSERIENNUMMER\tMODELL\tFIRMWARE\tVERBINDUNG\tSTATUS")
 	for _, d := range list {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", d.Name, d.IP, d.Serial, d.Model, d.Firmware, d.Connection(), d.Status())
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", d.Name, d.Hostname, d.IP, d.Serial, d.Model, d.Firmware, d.Connection(), d.Status())
 	}
 	tw.Flush()
 	if len(list) == 0 {
@@ -350,6 +353,33 @@ func cmdRestart(ctx context.Context, args []string) error {
 	return nil
 }
 
+func cmdReset(ctx context.Context, args []string) error {
+	fs, user := authFlags("reset")
+	all := fs.Bool("all", false, "auch Netzwerkeinstellungen zurücksetzen (Gerät bekommt neue IP)")
+	yes := fs.Bool("y", false, "ohne Rückfrage")
+	fs.Parse(reorder(args))
+	ip, err := oneArg(fs)
+	if err != nil {
+		return err
+	}
+	c, err := login(ctx, ip, *user)
+	if err != nil {
+		return err
+	}
+	what := "Alle Einstellungen, Benutzer und Passwörter (IP-Einstellungen bleiben)"
+	if *all {
+		what = "Alle Einstellungen, Benutzer, Passwörter UND die IP-Einstellungen"
+	}
+	if !*yes && !confirm(fmt.Sprintf("%s auf %s werden gelöscht. Fortfahren? [j/N] ", what, ip)) {
+		return errors.New("abgebrochen")
+	}
+	if err := c.FactoryReset(ctx, !*all); err != nil {
+		return err
+	}
+	fmt.Println("Werkseinstellungen werden geladen, das Gerät startet neu (ca. 1–2 Minuten).")
+	return nil
+}
+
 func authFlags(name string) (*flag.FlagSet, *string) {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
 	return fs, fs.String("u", "root", "Benutzername")
@@ -377,7 +407,7 @@ func reorder(args []string) []string {
 func isBoolFlag(a string) bool {
 	a = strings.TrimLeft(a, "-")
 	switch a {
-	case "dhcp", "sync", "init", "y", "dry-run":
+	case "dhcp", "sync", "init", "y", "dry-run", "all":
 		return true
 	}
 	return false

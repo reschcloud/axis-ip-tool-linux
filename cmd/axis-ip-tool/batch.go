@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -128,20 +129,38 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 	}
 	box.Append(note(summary))
 
-	// Zugang
+	// Zugang: angemeldete Geräte verwenden ihre geprüften Zugangsdaten
+	loggedIn := 0
+	for _, d := range b.devs {
+		if _, ok := b.w.creds[d.Key()]; ok && d.Unlocked {
+			loggedIn++
+		}
+	}
+	needLogin := loggedIn < len(b.devs)
 	user := entryRow("Benutzername", "root")
-	if c, ok := b.w.creds[b.devs[0].Key()]; ok {
-		user.SetText(c[0])
+	if b.w.lastUser != "" {
+		user.SetText(b.w.lastUser)
 	}
 	pass := passwordRow("Passwort")
 	pass2 := passwordRow("Passwort wiederholen")
 	initPw := switchRow("Erstpasswort auf Geräten im Werkszustand setzen", factory > 0)
 	initPw.SetSubtitle("Legt den Benutzer oben als Administrator an")
+	initPw.SetVisible(factory > 0)
 	updPass2 := func() { pass2.SetVisible(initPw.Active()) }
 	initPw.NotifyProperty("active", updPass2)
 	updPass2()
-	box.Append(heading("Zugang (für alle Geräte gleich)"))
-	box.Append(boxedList(user, pass, pass2, initPw))
+	box.Append(heading("Zugang"))
+	switch {
+	case !needLogin:
+		box.Append(note("Alle Geräte sind angemeldet – ihre gespeicherten Zugangsdaten werden verwendet."))
+	case loggedIn > 0:
+		box.Append(note(fmt.Sprintf("%d von %d Geräten sind angemeldet und verwenden ihre gespeicherten "+
+			"Zugangsdaten. Benutzer und Passwort unten gelten für die übrigen %d.",
+			loggedIn, len(b.devs), len(b.devs)-loggedIn)))
+	}
+	if needLogin {
+		box.Append(boxedList(user, pass, pass2, initPw))
+	}
 
 	// Netzwerk
 	netMode := comboRow("IPv4", "nicht ändern", "per DHCP", "statisch, fortlaufend")
@@ -178,20 +197,136 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 
 	// Hostname
 	hostOn := switchRow("Hostnamen setzen", false)
-	pattern := entryRow("Muster", "kamera-{nr:02}")
+	pattern := entryRow("Name", "kamera-##")
 	first := adw.NewSpinRowWithRange(0, 9999, 1)
-	first.SetTitle("Startnummer für {nr}")
+	first.SetTitle("Startwert für #")
 	first.SetValue(1)
-	pattern.SetSensitive(false)
-	first.SetSensitive(false)
-	hostOn.NotifyProperty("active", func() {
-		pattern.SetSensitive(hostOn.Active())
-		first.SetSensitive(hostOn.Active())
-	})
+	insert := func(ph string) {
+		r := []rune(pattern.Text())
+		pos := pattern.Position()
+		if pos < 0 || pos > len(r) {
+			pos = len(r)
+		}
+		pattern.SetText(string(r[:pos]) + ph + string(r[pos:]))
+		pattern.GrabFocus()
+		pattern.SetPosition(pos + len([]rune(ph)))
+	}
+	for _, p := range []struct{ ph, tip string }{
+		{"#", "Fortlaufende Nummer einfügen"},
+		{"@", "Letzte Zahl der IP-Adresse einfügen"},
+	} {
+		btn := gtk.NewButtonWithLabel(p.ph)
+		btn.SetTooltipText(p.tip)
+		btn.AddCSSClass("flat")
+		btn.SetVAlign(gtk.AlignCenter)
+		ph := p.ph
+		btn.ConnectClicked(func() { insert(ph) })
+		pattern.AddSuffix(btn)
+	}
+	hostHelp := note("#  fortlaufende Nummer – ## ergibt 01, 02 …, ### ergibt 001, 002 …\n" +
+		"@  letzte Zahl der IP-Adresse – bei 10.0.0.20 also 20")
+
+	// Live-Beispiel: so heißen die ausgewählten Geräte nachher
+	exampleList := gtk.NewListBox()
+	exampleList.SetSelectionMode(gtk.SelectionNone)
+	exampleList.AddCSSClass("boxed-list")
+	exampleHead := heading("So werden die Geräte heißen")
+	updExample := func() {
+		for c := exampleList.FirstChild(); c != nil; c = exampleList.FirstChild() {
+			exampleList.Remove(c)
+		}
+		s := axis.BatchSettings{
+			HostnamePattern: strings.TrimSpace(pattern.Text()),
+			FirstNumber:     int(first.Value()),
+			Order:           []string{"serial", "ip", "name"}[order.Selected()],
+		}
+		if netMode.Selected() == 2 {
+			if p, err := axis.ParsePrefix(mask.Text()); err == nil {
+				s.SetNetwork, s.StartIP, s.Prefix, s.Gateway = true, strings.TrimSpace(start.Text()), p, strings.TrimSpace(gw.Text())
+			}
+		}
+		as, err := axis.PlanBatch(b.devs, s, b.all)
+		if err != nil { // IP-Bereich (noch) unvollständig → ohne neue IPs
+			s.SetNetwork = false
+			as, _ = axis.PlanBatch(b.devs, s, b.all)
+		}
+		count := map[string]int{}
+		for _, a := range as {
+			count[a.Hostname]++
+		}
+		const maxShown = 6
+		for i, a := range as {
+			if i == maxShown {
+				more := adw.NewActionRow()
+				more.SetTitle(fmt.Sprintf("… und %d weitere", len(as)-maxShown))
+				more.AddCSSClass("dim-label")
+				exampleList.Append(more)
+				break
+			}
+			ip := a.IP
+			if ip == "" {
+				ip = a.Device.IP
+			}
+			r := adw.NewActionRow()
+			r.SetUseMarkup(false)
+			h := a.Hostname
+			if h == "" {
+				h = "(leer)"
+			}
+			r.SetTitle(h)
+			r.AddCSSClass("property")
+			sub := label(&a.Device) + "  ·  " + ip
+			var problem string
+			switch {
+			case !axis.ValidHostname(a.Hostname):
+				problem = "Ungültig: nur a–z, 0–9 und „-“, höchstens 63 Zeichen, nicht mit „-“ beginnen oder enden"
+			case count[a.Hostname] > 1:
+				problem = "Kommt mehrfach vor – # oder @ in den Namen aufnehmen"
+			}
+			icon := gtk.NewImageFromIconName("object-select-symbolic")
+			icon.AddCSSClass("success")
+			if problem != "" {
+				sub += "\n" + problem
+				icon.SetFromIconName("dialog-warning-symbolic")
+				icon.RemoveCSSClass("success")
+				icon.AddCSSClass("error")
+			}
+			r.SetSubtitle(sub)
+			r.AddPrefix(icon)
+			exampleList.Append(r)
+		}
+	}
+	updHostOn := func() {
+		on := hostOn.Active()
+		for _, w := range []gtk.Widgetter{pattern, first, hostHelp} {
+			gtk.BaseWidget(w).SetSensitive(on)
+		}
+		exampleHead.SetVisible(on)
+		exampleList.SetVisible(on)
+		if on {
+			updExample()
+		}
+	}
+	hostOn.NotifyProperty("active", updHostOn)
+	refreshExample := func() {
+		if hostOn.Active() {
+			updExample()
+		}
+	}
+	pattern.ConnectChanged(refreshExample)
+	first.NotifyProperty("value", refreshExample)
+	for _, e := range []*adw.EntryRow{start, mask, gw} {
+		e.ConnectChanged(refreshExample)
+	}
+	netMode.NotifyProperty("selected", refreshExample)
+	order.NotifyProperty("selected", refreshExample)
+	updHostOn()
+
 	box.Append(heading("Hostname"))
 	box.Append(boxedList(hostOn, pattern, first))
-	box.Append(note("Platzhalter: {nr} fortlaufende Nummer, {nr:02} mit führenden Nullen, " +
-		"{serial} Seriennummer, {ip} letzte Stelle der neuen IP."))
+	box.Append(hostHelp)
+	box.Append(exampleHead)
+	box.Append(exampleList)
 
 	// Zeit
 	tzOn := switchRow("Zeitzone setzen", false)
@@ -270,8 +405,11 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 			InitPassword: initPw.Active(),
 			Order:        []string{"serial", "ip", "name"}[order.Selected()],
 		}
+		if !needLogin {
+			s.User, s.Password, s.InitPassword = "", "", false
+		}
 		switch {
-		case s.User == "" || s.Password == "":
+		case needLogin && (s.User == "" || s.Password == ""):
 			b.toast("Benutzername und Passwort erforderlich")
 			return
 		case s.InitPassword && pass2.Text() != s.Password:
@@ -333,6 +471,11 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 				b.toast(fmt.Sprintf("%d Zeile(n) der CSV passen zu keinem ausgewählten Gerät", len(missing)))
 			}
 			axis.CheckAssignments(as, s, b.all)
+		}
+		for i := range as {
+			if c, ok := b.w.creds[as[i].Device.Key()]; ok && as[i].Device.Unlocked {
+				as[i].User, as[i].Password = c[0], c[1]
+			}
 		}
 		b.settings, b.as = s, as
 		b.nav.Push(b.previewPage())
@@ -577,7 +720,7 @@ func (b *batchDialog) runPage() *adw.NavigationPage {
 						r.icon.AddCSSClass("error")
 						r.row.SetSubtitle(prefix + " · " + e.Err.Error())
 					} else {
-						r.icon.SetFromIconName("emblem-ok-symbolic")
+						r.icon.SetFromIconName("object-select-symbolic")
 						r.icon.AddCSSClass("success")
 						r.row.SetSubtitle(prefix + " · fertig")
 					}
@@ -588,10 +731,23 @@ func (b *batchDialog) runPage() *adw.NavigationPage {
 			cancel()
 			failed := 0
 			for _, r := range res {
-				if r.Err != nil {
+				switch {
+				case r.Err == nil:
+					if r.Hostname != "" {
+						if dev := b.w.reg.Get(r.Device.Key()); dev != nil {
+							b.w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP,
+								Port: dev.Port, Online: true, Hostname: r.Hostname, HostnameSet: true})
+						}
+					}
+					if r.User == "" {
+						b.w.creds[r.Device.Key()] = [2]string{s.User, s.Password}
+					}
+					b.w.setAuth(r.Device.Key(), true)
+				case errors.Is(r.Err, axis.ErrAuth):
 					failed++
-				} else {
-					b.w.creds[r.Device.Key()] = [2]string{s.User, s.Password}
+					b.w.setAuth(r.Device.Key(), false)
+				default:
+					failed++
 				}
 			}
 			if failed == 0 {

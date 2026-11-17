@@ -171,8 +171,15 @@ func label(d *axis.Device) string {
 func withLogin[T any](w *window, d *axis.Device, what string,
 	action func(context.Context, *axis.Client) (T, error), done func(T)) {
 
-	var attempt func(user, pass string)
-	attempt = func(user, pass string) {
+	if d.NeedsSetup != nil && *d.NeedsSetup {
+		// Werkszustand: Anmelden ist unmöglich, erst einen Benutzer anlegen
+		w.toast(label(d) + ": noch kein Benutzer angelegt – bitte zuerst ein Passwort setzen")
+		w.selectKey(d.Key())
+		w.onPassword()
+		return
+	}
+	var attempt func(user, pass string, forAll bool)
+	attempt = func(user, pass string, forAll bool) {
 		key := d.Key()
 		ip, port := d.IP, d.Port
 		async(func() (T, error) {
@@ -183,23 +190,35 @@ func withLogin[T any](w *window, d *axis.Device, what string,
 			w.creds[key] = [2]string{user, pass}
 			done(v)
 			w.refreshInfo(key)
-		}, func(err error) {
-			if errors.Is(err, axis.ErrAuth) {
-				delete(w.creds, key)
-				w.askLogin(d, err.Error(), attempt)
-				return
+			if forAll {
+				w.unlockOthers(key, user, pass)
 			}
-			w.toast(fmt.Sprintf("%s: %v", what, err))
+		}, func(err error) {
+			switch {
+			case errors.Is(err, axis.ErrNoUser):
+				delete(w.creds, key)
+				if dev := w.reg.Get(key); dev != nil {
+					yes := true
+					w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP,
+						Port: dev.Port, Online: true, NeedsSetup: &yes})
+				}
+				w.toast(fmt.Sprintf("%s: %v", label(d), err))
+			case errors.Is(err, axis.ErrAuth):
+				w.setAuth(key, false)
+				w.askLogin(d, err.Error(), attempt)
+			default:
+				w.toast(fmt.Sprintf("%s: %v", what, err))
+			}
 		})
 	}
 	if c, ok := w.creds[d.Key()]; ok {
-		attempt(c[0], c[1])
+		attempt(c[0], c[1], false)
 	} else {
 		w.askLogin(d, "", attempt)
 	}
 }
 
-func (w *window) askLogin(d *axis.Device, errMsg string, cb func(user, pass string)) {
+func (w *window) askLogin(d *axis.Device, errMsg string, cb func(user, pass string, forAll bool)) {
 	body := fmt.Sprintf("%s (%s)", label(d), d.IP)
 	if errMsg != "" {
 		body += "\n\n" + errMsg
@@ -208,10 +227,24 @@ func (w *window) askLogin(d *axis.Device, errMsg string, cb func(user, pass stri
 	user := entryRow("Benutzername", "root")
 	if c, ok := w.creds[d.Key()]; ok {
 		user.SetText(c[0])
+	} else if w.lastUser != "" {
+		user.SetText(w.lastUser)
 	}
 	pass := passwordRow("Passwort")
 	pass.SetActivatesDefault(true)
-	dlg.SetExtraChild(boxedList(user, pass))
+	extra := gtk.NewBox(gtk.OrientationVertical, 12)
+	extra.Append(boxedList(user, pass))
+	forAll := gtk.NewCheckButtonWithLabel("")
+	if n := len(w.loginCandidates(d.Key())); n > 0 {
+		forAll.SetLabel(fmt.Sprintf("Diese Zugangsdaten auch bei allen anderen nicht angemeldeten Geräten verwenden (%d)", n))
+		forAll.SetActive(w.lastForAll)
+		if l, ok := forAll.Child().(*gtk.Label); ok {
+			l.SetWrap(true)
+			l.SetXAlign(0)
+		}
+		extra.Append(forAll)
+	}
+	dlg.SetExtraChild(extra)
 	dlg.AddResponse("cancel", "Abbrechen")
 	dlg.AddResponse("ok", "Anmelden")
 	dlg.SetResponseAppearance("ok", adw.ResponseSuggested)
@@ -219,11 +252,100 @@ func (w *window) askLogin(d *axis.Device, errMsg string, cb func(user, pass stri
 	dlg.SetCloseResponse("cancel")
 	dlg.ConnectResponse(func(r string) {
 		if r == "ok" {
-			cb(user.Text(), pass.Text())
+			all := forAll.Parent() != nil && forAll.Active()
+			w.lastUser, w.lastForAll = strings.TrimSpace(user.Text()), all
+			cb(strings.TrimSpace(user.Text()), pass.Text(), all)
 		}
 	})
 	dlg.Present(w)
 	pass.GrabFocus()
+}
+
+// loginCandidates: alle anderen erreichbaren Geräte ohne geprüfte Anmeldung
+// (gesperrt, nicht angemeldet oder Passwort falsch), aber nicht im Werkszustand.
+func (w *window) loginCandidates(except string) []string {
+	var keys []string
+	for _, d := range w.reg.All() {
+		if d.Key() == except || !d.Online || d.IP == "" || d.Unlocked ||
+			(d.NeedsSetup != nil && *d.NeedsSetup) {
+			continue
+		}
+		keys = append(keys, d.Key())
+	}
+	return keys
+}
+
+// unlockOthers probiert die Zugangsdaten bei allen übrigen Kandidaten und meldet das Ergebnis.
+func (w *window) unlockOthers(except, user, pass string) {
+	keys := w.loginCandidates(except)
+	if len(keys) == 0 {
+		return
+	}
+	reg := w.reg
+	ok, done := 0, 0
+	finish := func() {
+		done++
+		if done < len(keys) || reg != w.reg {
+			return
+		}
+		switch ok {
+		case len(keys):
+			w.toast(fmt.Sprintf("Zugangsdaten bei allen %d weiteren Geräten gültig", ok))
+		case 0:
+			w.toast("Zugangsdaten bei keinem weiteren Gerät gültig")
+		default:
+			w.toast(fmt.Sprintf("Zugangsdaten bei %d von %d weiteren Geräten gültig", ok, len(keys)))
+		}
+	}
+	for _, key := range keys {
+		d := reg.Get(key)
+		ip, port := d.IP, d.Port
+		w.infoPending[key] = true
+		w.rerender(key)
+		async(func() (axis.Device, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			c := axis.NewClient(ip, port, user, pass)
+			return loginInfo(ctx, c)
+		}, func(info axis.Device) {
+			delete(w.infoPending, key)
+			if dev := reg.Get(key); dev != nil && reg == w.reg {
+				ok++
+				w.creds[key] = [2]string{user, pass}
+				w.onDevice(context.Background(), asUpdate(info, dev))
+			}
+			finish()
+		}, func(error) { // andere Zugangsdaten: Status bleibt, wie er ist
+			delete(w.infoPending, key)
+			if reg == w.reg {
+				w.rerender(key)
+			}
+			finish()
+		})
+	}
+}
+
+// loginInfo prüft die Zugangsdaten und liest Modell, Firmware und den konfigurierten
+// Hostnamen. Das Ergebnis eignet sich direkt für onDevice (Serial/IP ergänzen).
+func loginInfo(ctx context.Context, c *axis.Client) (axis.Device, error) {
+	if err := c.CheckLogin(ctx); err != nil {
+		return axis.Device{}, err
+	}
+	info, err := c.BasicInfo(ctx)
+	if err != nil {
+		return axis.Device{}, err
+	}
+	out := axis.Device{Model: info.Model, Firmware: info.Firmware, Unlocked: true, Online: true}
+	if n, err := c.GetNetwork(ctx); err == nil && n.Hostname != "" {
+		out.Hostname, out.HostnameSet = strings.ToLower(n.Hostname), true
+	}
+	return out, nil
+}
+
+// asUpdate ergänzt ein loginInfo-Ergebnis um die Identität des Geräts.
+func asUpdate(info axis.Device, dev *axis.Device) axis.Device {
+	info.Serial, info.IP, info.Port = dev.Serial, dev.IP, dev.Port
+	return info
 }
 
 // ---------------------------------------------------------------- Aktionen
@@ -384,6 +506,10 @@ func (w *window) networkDialog(d *axis.Device, cfg axis.NetworkConfig) {
 				glib.TimeoutSecondsAdd(8, func() { w.rescan() })
 			default:
 				w.toast("Netzwerkeinstellungen gespeichert")
+			}
+			if dev := w.reg.Get(key); dev != nil && !n.HostnameFromDHCP && n.Hostname != "" {
+				w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP, Port: dev.Port,
+					Online: true, Hostname: strings.ToLower(n.Hostname), HostnameSet: true})
 			}
 		}, func(err error) {
 			dlg.busy(false)
@@ -626,6 +752,67 @@ func (w *window) onRestart() {
 		withLogin(w, d, "Neustart", func(ctx context.Context, c *axis.Client) (struct{}, error) {
 			return struct{}{}, c.Restart(ctx)
 		}, func(struct{}) { w.toast("Neustart ausgelöst") })
+	})
+	dlg.Present(w)
+}
+
+// onReset setzt das Gerät nach Rückfrage auf Werkseinstellungen zurück.
+func (w *window) onReset() {
+	d := w.selected()
+	if d == nil {
+		return
+	}
+	dlg := adw.NewAlertDialog("Auf Werkseinstellungen zurücksetzen?",
+		fmt.Sprintf("%s (%s)\n\nAlle Einstellungen, Benutzer und Passwörter werden gelöscht. "+
+			"Das Gerät startet neu und muss danach mit einem Erstpasswort neu eingerichtet werden.",
+			label(d), d.IP))
+	keep := gtk.NewCheckButtonWithLabel("Netzwerkeinstellungen (IP-Adresse) behalten")
+	keep.SetActive(true)
+	hint := note("")
+	hint.SetMarginStart(28)
+	updHint := func() {
+		if keep.Active() {
+			hint.SetText("Das Gerät bleibt unter " + d.IP + " erreichbar.")
+		} else {
+			hint.SetText("Das Gerät holt sich danach per DHCP eine Adresse, ohne DHCP-Server " +
+				"nimmt es 192.168.0.90.")
+		}
+	}
+	keep.ConnectToggled(updHint)
+	updHint()
+	extra := gtk.NewBox(gtk.OrientationVertical, 6)
+	extra.Append(keep)
+	extra.Append(hint)
+	dlg.SetExtraChild(extra)
+	dlg.AddResponse("cancel", "Abbrechen")
+	dlg.AddResponse("reset", "Zurücksetzen")
+	dlg.SetResponseAppearance("reset", adw.ResponseDestructive)
+	dlg.SetDefaultResponse("cancel")
+	dlg.SetCloseResponse("cancel")
+	key := d.Key()
+	dlg.ConnectResponse(func(r string) {
+		if r != "reset" {
+			return
+		}
+		keepNet := keep.Active()
+		withLogin(w, d, "Zurücksetzen", func(ctx context.Context, c *axis.Client) (struct{}, error) {
+			if err := c.CheckLogin(ctx); err != nil { // nicht anonym auslösen lassen
+				return struct{}{}, err
+			}
+			return struct{}{}, c.FactoryReset(ctx, keepNet)
+		}, func(struct{}) {
+			delete(w.creds, key)
+			if dev := w.reg.Get(key); dev != nil {
+				yes := true
+				w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP,
+					Port: dev.Port, Online: true, NeedsSetup: &yes})
+			}
+			if keepNet {
+				w.toast(label(d) + " wird zurückgesetzt und startet neu (ca. 1–2 Minuten)")
+			} else {
+				w.toast(label(d) + " wird zurückgesetzt – danach neu suchen, die IP-Adresse ändert sich")
+			}
+		})
 	})
 	dlg.Present(w)
 }
