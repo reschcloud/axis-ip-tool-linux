@@ -26,7 +26,11 @@ die Flatpak-Variante):
 curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/download/install.sh | sh
 ```
 
-Entfernen: `… | sh -s -- --uninstall`
+Entfernen:
+
+```sh
+curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/download/install.sh | sh -s -- --uninstall
+```
 
 **Manuell:** Paket von der Release-Seite laden und installieren, z. B.
 `sudo dnf install ./axis-ip-tool*.rpm` bzw. `sudo apt install ./axis-ip-tool*.deb`.
