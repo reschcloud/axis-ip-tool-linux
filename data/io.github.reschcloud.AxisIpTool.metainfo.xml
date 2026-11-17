@@ -17,6 +17,7 @@
       <li>Configure IPv4 (DHCP or static), hostname and DNS</li>
       <li>Set time zone, NTP servers or synchronise the clock</li>
       <li>Show a live snapshot preview</li>
+      <li>Configure many devices at once: sequential IP addresses, hostname patterns or a CSV plan</li>
       <li>Open the web interface and restart devices</li>
     </ul>
     <p xml:lang="de">Findet Axis-Geräte im lokalen Netz (Bonjour/mDNS und SSDP) und erledigt die

@@ -39,6 +39,11 @@ Für schnelle Prüfungen immer `make gui` verwenden.
   `ColumnView`. Zellen werden live aktualisiert über `window.cells` (gebundene Labels je Schlüssel),
   ohne Modelländerung (Auswahl bleibt erhalten). Statuszelle „Gesperrt“ ist klickbar → `unlock()`.
   Netzwerkaufrufe immer in Goroutinen, Rückkehr in den GTK-Thread über `glib.IdleAdd` (`ui()`/`async()`/`withLogin()` in actions.go).
+- `internal/axis/batch.go`: Mehrfachkonfiguration. `PlanBatch` (IP-Bereich, überspringt belegte
+  IPs/Gateway/Netz-/Broadcast, Hostname-Muster `{nr:02}` `{serial}` `{ip}`), `CheckAssignments`
+  (nach Handänderungen), `ParsePlanCSV`/`ApplyPlan`, `AddressInUse` (TCP 80/443), `RunBatch`
+  (sequenziell, IP zuletzt, Fehler stoppen den Rest nicht). GUI: `cmd/axis-ip-tool/batch.go`
+  (Assistent mit `adw.NavigationView`), CLI: `axisctl batch`.
 - `cmd/axisctl`: CLI mit Unterbefehlen; Passwort aus `$AXIS_PASSWORD` oder Terminal-Abfrage.
 
 ## Wichtige Entscheidungen / Fallstricke
@@ -87,7 +92,8 @@ Es gibt (noch) keinen GitHub-Actions-Workflow im Projekt.
    + Release). rpm-Installation/-Deinstallation auf Fedora getestet; install.sh und arm64 ungetestet.
 3. Passwörter optional im GNOME-Schlüsselbund speichern (Secret-Service/Portal) statt nur im Speicher.
 4. UI in Blueprint (`.blp`) auslagern? Aktuell im Code gebaut (gotk4-Templates sind umständlich).
-5. Mehrfachauswahl / Massenkonfiguration (mehrere Kameras nacheinander mit IP-Bereich).
+5. Mehrfachkonfiguration: umgesetzt (v0.2.0), GUI-Assistent noch nicht an echten Kameras
+   durchgespielt. Idee: Vorschaubild je Gerät in der Vorschau-Tabelle; Neustart für mehrere.
 6. Firmware-Update, Werksreset. (NTP über `ntp.cgi` ist umgesetzt, an P3225-VE Mk II noch ungetestet.)
 7. Übersetzung (gettext) – derzeit nur Deutsch.
-8. Mehrfachkonfiguration (v0.2.0) – siehe Punkt 5.
+8. –

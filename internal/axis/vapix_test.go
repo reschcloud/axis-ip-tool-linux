@@ -100,6 +100,8 @@ func (f *fakeCamera) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Write([]byte{0xFF, 0xD8, 0xFF, 0xE0, 0, 0})
+	case "/axis-cgi/param.cgi":
+		io.WriteString(w, "root.Brand.Brand=AXIS\n")
 	case "/axis-cgi/time.cgi":
 		io.WriteString(w, `{"error":{"code":2002,"message":"Invalid time zone"}}`)
 	default:

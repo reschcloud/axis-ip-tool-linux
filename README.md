@@ -15,6 +15,7 @@ Kein offizielles Produkt der Axis Communications AB.
 | Zeitzone + Uhrzeit | `time.cgi`, Fallback `date.cgi` |
 | NTP-Server | `ntp.cgi`, Fallback `param.cgi` |
 | Vorschaubild | `jpg/image.cgi` (1 Bild/s) |
+| Mehrere Geräte auf einmal | Passwort, fortlaufende IPs, Hostname-Muster, Zeit/NTP; CSV-Plan; Protokoll |
 | Webseite öffnen, Neustart | Standardbrowser, `restart.cgi` |
 
 ## Installation
@@ -78,6 +79,27 @@ axisctl list                                   # Geräte suchen
 axisctl init 192.168.0.90                      # ersten Admin anlegen
 axisctl net 192.168.0.90 -ip 10.0.0.20/24 -gw 10.0.0.1 -hostname kamera-hof
 axisctl time 192.168.0.90 -tz Europe/Vienna -ntp pool.ntp.org
+
+# Mehrere Kameras: fortlaufende IPs ab .20, Hostnamen kamera-01, kamera-02 …
+axisctl batch -init -ip 10.0.0.20/24 -gw 10.0.0.1 -hostname 'kamera-{nr:02}' \
+              -ntp pool.ntp.org ACCC8E000001 ACCC8E000002 ACCC8E000003
+axisctl batch -ip 10.0.0.1/24 -csv plan.csv -dry-run   # Zuordnung aus CSV, nur anzeigen
+```
+
+### Mehrfachkonfiguration
+
+In der Liste mehrere Geräte auswählen (Strg/Umschalt + Klick, Strg+A) → **Mehrere konfigurieren**.
+Ein Assistent fragt die gemeinsamen Einstellungen ab, zeigt eine Vorschau mit den geplanten
+Adressen und Hostnamen (einzeln änderbar, Konflikte werden markiert) und konfiguriert die Geräte
+nacheinander. Am Ende lässt sich ein Protokoll als CSV speichern.
+
+Statt eines Adressbereichs kann eine **CSV-Datei** die Zuordnung vorgeben (Trennzeichen `;`, `,`
+oder Tab, Kopfzeile optional):
+
+```csv
+Seriennummer;IP;Hostname
+ACCC8E000001;10.0.0.20;kamera-einfahrt
+ACCC8E000002;10.0.0.21;kamera-hof
 ```
 
 ## Aufbau

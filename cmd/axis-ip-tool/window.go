@@ -57,7 +57,7 @@ type window struct {
 
 	keys      *gtk.StringList
 	filter    *gtk.CustomFilter
-	selection *gtk.SingleSelection
+	selection *gtk.MultiSelection
 	stack     *gtk.Stack
 	search    *gtk.SearchEntry
 	toasts    *adw.ToastOverlay
@@ -131,12 +131,13 @@ func (w *window) build() {
 	cv.SetReorderable(true)
 	cv.AddCSSClass("data-table")
 	sorted := gtk.NewSortListModel(filtered, cv.Sorter())
-	w.selection = gtk.NewSingleSelection(sorted)
-	w.selection.SetAutoselect(false)
-	w.selection.SetCanUnselect(true)
+	w.selection = gtk.NewMultiSelection(sorted)
 	w.selection.ConnectSelectionChanged(func(_, _ uint) { w.updateActions() })
 	cv.SetModel(w.selection)
-	cv.ConnectActivate(func(uint) { w.onNetwork() })
+	cv.ConnectActivate(func(pos uint) {
+		w.selection.SelectItem(pos, true)
+		w.onNetwork()
+	})
 
 	var ipCol *gtk.ColumnViewColumn
 	for i, c := range columns {
@@ -175,6 +176,7 @@ func (w *window) build() {
 		{"network", "Netzwerk", "network-wired-symbolic", false, w.onNetwork},
 		{"time", "Datum & Zeit", "preferences-system-time-symbolic", false, w.onTime},
 		{"restart", "Neustart", "system-reboot-symbolic", true, w.onRestart},
+		{"batch", "Mehrere konfigurieren", "view-list-bullet-symbolic", true, w.onBatch},
 	} {
 		content := adw.NewButtonContent()
 		content.SetLabel(b.label)
@@ -371,7 +373,7 @@ func (w *window) onStatusClicked(l *gtk.Label) {
 func (w *window) selectKey(key string) {
 	for i := uint(0); i < w.selection.NItems(); i++ {
 		if w.selection.Item(i).Cast().(*gtk.StringObject).String() == key {
-			w.selection.SetSelected(i)
+			w.selection.SelectItem(i, true)
 			return
 		}
 	}
@@ -415,19 +417,47 @@ func (w *window) toast(msg string) {
 	w.toasts.AddToast(t)
 }
 
+// selected liefert das ausgewählte Gerät, wenn genau eines ausgewählt ist.
 func (w *window) selected() *axis.Device {
-	obj := w.selection.SelectedItem()
-	if obj == nil {
-		return nil
+	if devs := w.selectedDevices(); len(devs) == 1 {
+		return devs[0]
 	}
-	return w.reg.Get(obj.Cast().(*gtk.StringObject).String())
+	return nil
+}
+
+// selectedDevices liefert alle ausgewählten Geräte in Anzeigereihenfolge.
+func (w *window) selectedDevices() []*axis.Device {
+	set := w.selection.Selection()
+	var out []*axis.Device
+	for i := uint64(0); i < set.Size(); i++ {
+		obj := w.selection.Item(set.Nth(uint(i)))
+		if obj == nil {
+			continue
+		}
+		if d := w.reg.Get(obj.Cast().(*gtk.StringObject).String()); d != nil {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func (w *window) updateActions() {
-	d := w.selected()
-	usable := d != nil && d.Online && d.IP != ""
-	for _, b := range w.buttons {
+	sel := w.selectedDevices()
+	usable := len(sel) == 1 && sel[0].Online && sel[0].IP != ""
+	online := 0
+	for _, d := range sel {
+		if d.Online && d.IP != "" {
+			online++
+		}
+	}
+	for k, b := range w.buttons {
+		if k == "batch" {
+			b.SetSensitive(online >= 2)
+			b.SetVisible(len(sel) >= 2)
+			continue
+		}
 		b.SetSensitive(usable)
+		b.SetVisible(len(sel) < 2)
 	}
 	n := w.keys.NItems()
 	switch n {

@@ -38,6 +38,7 @@ Befehle:
   time     <ip> [-tz Europe/Vienna] [-sync=true]
                 [-ntp dhcp|off|SERVER,SERVER]       Zeitzone/Uhrzeit/NTP setzen
   restart  <ip>                                     Neustart
+  batch    [GERÄT …] [-csv PLAN] …                  Mehrere Geräte konfigurieren (axisctl batch -h)
   version                                           Version anzeigen
 
 Anmeldung: -u BENUTZER (Standard root), Passwort aus $AXIS_PASSWORD oder Abfrage.
@@ -74,6 +75,8 @@ func main() {
 		err = cmdTime(ctx, args)
 	case "restart":
 		err = cmdRestart(ctx, args)
+	case "batch":
+		err = cmdBatch(ctx, args)
 	case "version", "--version":
 		fmt.Println("axisctl", version)
 	case "-h", "--help", "help":
@@ -93,28 +96,10 @@ func cmdList(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
 	t := fs.String("t", "5s", "Suchdauer (z. B. 5 oder 10s)")
 	fs.Parse(args)
-	dur := new(time.Duration)
-	if n, err := strconv.Atoi(*t); err == nil {
-		*dur = time.Duration(n) * time.Second
-	} else if *dur, err = time.ParseDuration(*t); err != nil {
-		return fmt.Errorf("ungültige Suchdauer %q", *t)
+	list, err := discover(ctx, *t)
+	if err != nil {
+		return err
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, *dur)
-	defer cancel()
-	var mu sync.Mutex
-	reg := axis.NewRegistry()
-	axis.Discover(ctx, func(d axis.Device) {
-		mu.Lock()
-		reg.Update(d)
-		mu.Unlock()
-	}, func(err error) { fmt.Fprintln(os.Stderr, "Hinweis:", err) })
-	<-ctx.Done()
-	time.Sleep(300 * time.Millisecond)
-
-	mu.Lock()
-	defer mu.Unlock()
-	list := reg.All()
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tIP\tSERIENNUMMER\tMODELL\tFIRMWARE\tVERBINDUNG\tSTATUS")
 	for _, d := range list {
@@ -125,6 +110,30 @@ func cmdList(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, "Keine Geräte gefunden.")
 	}
 	return nil
+}
+
+// discover sucht für die Dauer t (z. B. "5" oder "10s") nach Geräten.
+func discover(ctx context.Context, t string) ([]*axis.Device, error) {
+	var dur time.Duration
+	if n, err := strconv.Atoi(t); err == nil {
+		dur = time.Duration(n) * time.Second
+	} else if dur, err = time.ParseDuration(t); err != nil {
+		return nil, fmt.Errorf("ungültige Suchdauer %q", t)
+	}
+	sctx, cancel := context.WithTimeout(ctx, dur)
+	defer cancel()
+	var mu sync.Mutex
+	reg := axis.NewRegistry()
+	axis.Discover(sctx, func(d axis.Device) {
+		mu.Lock()
+		reg.Update(d)
+		mu.Unlock()
+	}, func(err error) { fmt.Fprintln(os.Stderr, "Hinweis:", err) })
+	<-sctx.Done()
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	return reg.All(), ctx.Err()
 }
 
 // ---------------------------------------------------------------- info
@@ -367,7 +376,11 @@ func reorder(args []string) []string {
 
 func isBoolFlag(a string) bool {
 	a = strings.TrimLeft(a, "-")
-	return a == "dhcp" || a == "sync"
+	switch a {
+	case "dhcp", "sync", "init", "y", "dry-run":
+		return true
+	}
+	return false
 }
 
 func oneArg(fs *flag.FlagSet) (string, error) {
