@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	appID   = "io.github.axisiptool.AxisIpTool"
+	appID   = "io.github.reschcloud.AxisIpTool"
 	version = "0.2.0"
 )
 

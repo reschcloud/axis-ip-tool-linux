@@ -1,16 +1,16 @@
 #!/bin/sh
 # Axis IP Tool – Installation mit einem Befehl
 #
-#   curl -fsSL https://github.com/OWNER/axis-ip-tool/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/download/install.sh | sh
 #
 # Optionen (nach „sh -s --“ anhängen):
 #   --uninstall     alles wieder entfernen
 #   --flatpak       Flatpak statt Systempaket (Standard auf Silverblue/Bazzite & Co.)
 set -eu
 
-REPO="${AXIS_IP_TOOL_REPO:-OWNER/axis-ip-tool}"
+REPO="${AXIS_IP_TOOL_REPO:-reschcloud/axis-ip-tool-linux}"
 BASE="https://github.com/$REPO/releases/latest/download"
-APP_ID=io.github.axisiptool.AxisIpTool
+APP_ID=io.github.reschcloud.AxisIpTool
 
 mode=install app=pkg
 for a in "$@"; do
@@ -57,7 +57,11 @@ if [ "$mode" = uninstall ]; then
 fi
 
 # ---------------------------------------------------------------- Installation
-[ "$(uname -m)" = x86_64 ] || die "fertige Pakete gibt es nur für x86_64 – bitte aus dem Quellcode bauen (make && sudo make install)"
+case "$(uname -m)" in
+  x86_64)        arch=x86_64  debarch=amd64 ;;
+  aarch64|arm64) arch=aarch64 debarch=arm64 ;;
+  *) die "fertige Pakete gibt es nur für x86_64 und aarch64 – bitte aus dem Quellcode bauen (make && sudo make install)" ;;
+esac
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -66,13 +70,13 @@ get() { say "Lade $1 …"; curl -fL --proto '=https' -o "$tmp/$1" "$BASE/$1"; }
 if [ "$app" = flatpak ]; then
   command -v flatpak >/dev/null || die "flatpak ist nicht installiert"
   flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-  get "$APP_ID.flatpak"
-  flatpak install --user -y "$tmp/$APP_ID.flatpak"
+  get "$APP_ID.$arch.flatpak"
+  flatpak install --user -y "$tmp/$APP_ID.$arch.flatpak"
 else
   case $fam in
-    dnf)    ext=x86_64.rpm ;;
-    apt)    ext=amd64.deb ;;
-    pacman) ext=x86_64.pkg.tar.zst ;;
+    dnf)    ext=$arch.rpm ;;
+    apt)    ext=$debarch.deb ;;
+    pacman) ext=$arch.pkg.tar.zst ;;
   esac
   get "axis-ip-tool.$ext"
   say "Installiere Paket (Administratorpasswort erforderlich) …"

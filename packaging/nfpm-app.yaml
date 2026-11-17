@@ -1,6 +1,6 @@
 # nfpm-Konfiguration: GUI + CLI. Bauen mit `make packages`.
 name: axis-ip-tool
-arch: amd64
+arch: ${ARCH}
 platform: linux
 version: ${VERSION}
 release: 1
@@ -12,7 +12,7 @@ description: |
   GNOME-App und Kommandozeilenwerkzeug (axisctl), angelehnt an die AXIS IP Utility.
   Kein offizielles Produkt der Axis Communications AB.
 license: MIT
-homepage: https://github.com/OWNER/axis-ip-tool
+homepage: https://github.com/reschcloud/axis-ip-tool-linux
 
 contents:
   - src: build/axis-ip-tool
@@ -21,14 +21,14 @@ contents:
   - src: build/axisctl
     dst: /usr/bin/axisctl
     file_info: { mode: 0755 }
-  - src: data/io.github.axisiptool.AxisIpTool.desktop
-    dst: /usr/share/applications/io.github.axisiptool.AxisIpTool.desktop
-  - src: data/io.github.axisiptool.AxisIpTool.metainfo.xml
-    dst: /usr/share/metainfo/io.github.axisiptool.AxisIpTool.metainfo.xml
-  - src: data/icons/hicolor/scalable/apps/io.github.axisiptool.AxisIpTool.svg
-    dst: /usr/share/icons/hicolor/scalable/apps/io.github.axisiptool.AxisIpTool.svg
-  - src: data/icons/hicolor/symbolic/apps/io.github.axisiptool.AxisIpTool-symbolic.svg
-    dst: /usr/share/icons/hicolor/symbolic/apps/io.github.axisiptool.AxisIpTool-symbolic.svg
+  - src: data/io.github.reschcloud.AxisIpTool.desktop
+    dst: /usr/share/applications/io.github.reschcloud.AxisIpTool.desktop
+  - src: data/io.github.reschcloud.AxisIpTool.metainfo.xml
+    dst: /usr/share/metainfo/io.github.reschcloud.AxisIpTool.metainfo.xml
+  - src: data/icons/hicolor/scalable/apps/io.github.reschcloud.AxisIpTool.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/io.github.reschcloud.AxisIpTool.svg
+  - src: data/icons/hicolor/symbolic/apps/io.github.reschcloud.AxisIpTool-symbolic.svg
+    dst: /usr/share/icons/hicolor/symbolic/apps/io.github.reschcloud.AxisIpTool-symbolic.svg
 
 scripts:
   postinstall: packaging/scripts/app-postinstall.sh

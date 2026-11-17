@@ -19,10 +19,11 @@ Kein offizielles Produkt der Axis Communications AB.
 
 ## Installation
 
-**Ein Befehl** (Fedora, Ubuntu/Debian, Arch; Silverblue & Co. bekommen automatisch die Flatpak-Variante):
+**Ein Befehl** (Fedora, Ubuntu/Debian, Arch; x86_64 und arm64; Silverblue & Co. bekommen automatisch
+die Flatpak-Variante):
 
 ```sh
-curl -fsSL https://github.com/OWNER/axis-ip-tool/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/download/install.sh | sh
 ```
 
 Entfernen: `… | sh -s -- --uninstall`

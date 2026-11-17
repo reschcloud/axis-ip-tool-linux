@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.axisiptool.AxisIpTool</id>
+  <id>io.github.reschcloud.AxisIpTool</id>
   <name>Axis IP Tool</name>
   <summary>Find and set up Axis network cameras</summary>
   <summary xml:lang="de">Axis-Netzwerkkameras finden und einrichten</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
-  <developer id="io.github.axisiptool">
+  <developer id="io.github.reschcloud">
     <name>Axis IP Tool contributors</name>
   </developer>
   <description>
@@ -23,9 +23,9 @@
       Grundeinrichtung wie die AXIS IP Utility.</p>
     <p>Not an official product of Axis Communications AB.</p>
   </description>
-  <url type="homepage">https://github.com/OWNER/axis-ip-tool</url>
-  <url type="bugtracker">https://github.com/OWNER/axis-ip-tool/issues</url>
-  <launchable type="desktop-id">io.github.axisiptool.AxisIpTool.desktop</launchable>
+  <url type="homepage">https://github.com/reschcloud/axis-ip-tool-linux</url>
+  <url type="bugtracker">https://github.com/reschcloud/axis-ip-tool-linux/issues</url>
+  <launchable type="desktop-id">io.github.reschcloud.AxisIpTool.desktop</launchable>
   <provides>
     <binary>axis-ip-tool</binary>
     <binary>axisctl</binary>

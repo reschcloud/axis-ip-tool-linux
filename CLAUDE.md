@@ -49,11 +49,12 @@ Für schnelle Prüfungen immer `make gui` verwenden.
 - `go.mod` enthält `replace`-Direktiven auf die GitHub-Spiegel von `golang.org/x/*` und
   `go4.org/…` (die Entwicklungsumgebung hatte keinen Zugriff auf proxy.golang.org). Sie sind
   harmlos; wer will, entfernt sie und führt `go mod tidy` aus.
-- App-ID: `io.github.axisiptool.AxisIpTool` – beim Veröffentlichen ggf. an den echten
-  GitHub-Account anpassen (Dateinamen in `data/`, `packaging/`, Konstante in `main.go`).
-  Platzhalter `OWNER/axis-ip-tool` in README, install.sh, nfpm-Config.
-- Pakete: ein Paket `axis-ip-tool` (GUI + CLI). Release-Builds auf Ubuntu 24.04 (älteste glibc),
-  die Binaries laufen damit auch auf Fedora ≥ 40 und Arch. openSUSE: Paketnamen der Abhängigkeiten passen
+- App-ID: `io.github.reschcloud.AxisIpTool`, Repo `github.com/reschcloud/axis-ip-tool-linux`
+  (Dateinamen in `data/`, `packaging/`, Konstante in `main.go`, `APP_ID` in Makefile/install.sh).
+- Pakete: ein Paket `axis-ip-tool` (GUI + CLI) für x86_64 und arm64. Release-Builds nativ auf
+  Ubuntu 24.04 (`ubuntu-24.04` / `ubuntu-24.04-arm`, älteste glibc), laufen damit auch auf
+  Fedora ≥ 40 und Arch. nfpm-Architektur kommt aus `$ARCH` (Makefile: `go env GOARCH`).
+  Release-Dateien haben feste Namen (`axis-ip-tool.<arch>.rpm` usw.), die `install.sh` erwartet. openSUSE: Paketnamen der Abhängigkeiten passen
   nicht (nfpm-rpm nutzt Fedora-Namen) → dort aus dem Quellcode bauen.
 - Neuere AXIS OS (gesehen an P3225-VE Mk II) beantworten `basicdeviceinfo.cgi` nach dem Anlegen
   eines Benutzers nur noch mit Anmeldung (401). Modell kommt dann aus dem mDNS-Namen; Firmware lädt
@@ -78,10 +79,11 @@ Es gibt (noch) keinen GitHub-Actions-Workflow im Projekt.
 ## Offene Punkte / Ideen
 
 1. An echter Kamera testen (am besten AXIS OS 11/12 und eine ältere Firmware 9.x).
-2. Platzhalter `OWNER` ersetzen, GitHub-Repo anlegen, Tag `v0.1.0` (Workflow `.github/workflows/release.yml` baut Pakete + Release). `make packages` lokal ok; rpm-Installation + install.sh noch testen.
+2. GitHub-Repo anlegen, pushen, Tag `v0.1.0` (Workflow `.github/workflows/release.yml` baut Pakete
+   + Release). rpm-Installation/-Deinstallation auf Fedora getestet; install.sh und arm64 ungetestet.
 3. Passwörter optional im GNOME-Schlüsselbund speichern (Secret-Service/Portal) statt nur im Speicher.
 4. UI in Blueprint (`.blp`) auslagern? Aktuell im Code gebaut (gotk4-Templates sind umständlich).
 5. Mehrfachauswahl / Massenkonfiguration (mehrere Kameras nacheinander mit IP-Bereich).
 6. Firmware-Update, Werksreset. (NTP über `ntp.cgi` ist umgesetzt, an P3225-VE Mk II noch ungetestet.)
 7. Übersetzung (gettext) – derzeit nur Deutsch.
-8. arm64-Pakete in CI.
+8. Mehrfachkonfiguration (v0.2.0) – siehe Punkt 5.

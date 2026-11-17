@@ -1,6 +1,6 @@
 # Flatpak-Manifest. Lokal bauen: `make flatpak` (lädt die Go-Module beim Bauen aus dem Netz).
 # Für Flathub müssten die Module vorab vendored werden (go mod vendor), weil dort ohne Netz gebaut wird.
-id: io.github.axisiptool.AxisIpTool
+id: io.github.reschcloud.AxisIpTool
 runtime: org.gnome.Platform
 runtime-version: '51'
 sdk: org.gnome.Sdk

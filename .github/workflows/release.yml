@@ -1,6 +1,8 @@
 # Tests bei jedem Push/PR; bei einem Tag „v*“ zusätzlich Pakete bauen und als Release veröffentlichen.
 #
 #   git tag v0.1.0 && git push origin v0.1.0
+#
+# Gebaut wird nativ auf x86_64 und arm64 (GitHub-Runner ubuntu-24.04-arm, für öffentliche Repos frei).
 name: Build & Release
 
 on:
@@ -15,8 +17,14 @@ permissions:
 
 jobs:
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04,     goarch: amd64, arch: x86_64,  debarch: amd64 }
+          - { runner: ubuntu-24.04-arm, goarch: arm64, arch: aarch64, debarch: arm64 }
     # Ältestes unterstütztes Ubuntu = älteste glibc → Binaries laufen auch auf Fedora und Arch.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,28 +56,33 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GOTOOLCHAIN: auto
+          ARCH: ${{ matrix.goarch }}
         run: |
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
           make packages
           # Feste Namen, damit install.sh „latest/download/…“ verwenden kann
           cd dist
-          mv axis-ip-tool-*.x86_64.rpm         axis-ip-tool.x86_64.rpm
-          mv axis-ip-tool_*_amd64.deb          axis-ip-tool.amd64.deb
-          mv axis-ip-tool-*-x86_64.pkg.tar.zst axis-ip-tool.x86_64.pkg.tar.zst
-          cp ../packaging/install.sh .
-          sha256sum * > SHA256SUMS
+          mv axis-ip-tool-*.${{ matrix.arch }}.rpm          axis-ip-tool.${{ matrix.arch }}.rpm
+          mv axis-ip-tool_*_${{ matrix.debarch }}.deb       axis-ip-tool.${{ matrix.debarch }}.deb
+          mv axis-ip-tool-*-${{ matrix.arch }}.pkg.tar.zst  axis-ip-tool.${{ matrix.arch }}.pkg.tar.zst
           ls -l
 
       - uses: actions/upload-artifact@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
-          name: packages
+          name: packages-${{ matrix.arch }}
           path: dist/
 
   flatpak:
     # Nur für Releases. Flatpak-Build ist noch ungetestet und blockiert das Release nicht.
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04,     arch: x86_64 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64 }
+    runs-on: ${{ matrix.runner }}
     continue-on-error: true
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
@@ -78,8 +91,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: io.github.axisiptool.AxisIpTool.flatpak
-          manifest-path: packaging/io.github.axisiptool.AxisIpTool.yml
+          bundle: io.github.reschcloud.AxisIpTool.${{ matrix.arch }}.flatpak
+          manifest-path: packaging/io.github.reschcloud.AxisIpTool.yml
+          arch: ${{ matrix.arch }}
           upload-artifact: true
 
   release:
@@ -90,15 +104,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
       - name: Dateien einsammeln
         run: |
           mkdir out
-          cp artifacts/packages/* out/
-          find artifacts -name '*.flatpak' -exec cp {} out/ \; || true
-          ls -l out
+          find artifacts -type f \( -name '*.rpm' -o -name '*.deb' -o -name '*.pkg.tar.zst' -o -name '*.flatpak' \) \
+            -exec cp {} out/ \;
+          cp packaging/install.sh out/
+          cd out && sha256sum * > SHA256SUMS && ls -l
       - uses: softprops/action-gh-release@v2
         with:
           files: out/*
