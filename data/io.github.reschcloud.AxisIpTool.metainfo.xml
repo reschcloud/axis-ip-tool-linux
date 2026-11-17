@@ -5,7 +5,7 @@
   <summary>Find and set up Axis network cameras</summary>
   <summary xml:lang="de">Axis-Netzwerkkameras finden und einrichten</summary>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT</project_license>
+  <project_license>GPL-3.0-or-later</project_license>
   <developer id="io.github.reschcloud">
     <name>Axis IP Tool contributors</name>
   </developer>

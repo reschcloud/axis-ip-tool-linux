@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // axis-ip-tool – GNOME-App zum Finden und Grundkonfigurieren von Axis-Geräten,
 // angelehnt an die AXIS IP Utility.
 package main
@@ -51,6 +53,6 @@ func showAbout(app *adw.Application) {
 	d.SetVersion(version)
 	d.SetComments("Axis-Geräte im Netzwerk finden und grundlegend konfigurieren – " +
 		"inspiriert von der AXIS IP Utility.\n\nKein offizielles Produkt der Axis Communications AB.")
-	d.SetLicenseType(gtk.LicenseMITX11)
+	d.SetLicenseType(gtk.LicenseGPL30)
 	d.Present(app.ActiveWindow())
 }

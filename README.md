@@ -74,3 +74,11 @@ packaging/           nfpm-Konfiguration, Flatpak-Manifest, install.sh, Paketskri
   (Spalte „Verbindung“). Die selbst ausgestellten Zertifikate der Kameras werden ohne Prüfung
   akzeptiert: verschlüsselt, aber kein Schutz gegen einen aktiven Angreifer im Netz.
   Menü → „Nur HTTPS verwenden“ bzw. `axisctl --https-only` verbietet den Rückfall auf HTTP.
+
+## Lizenz
+
+Copyright © 2026 Michael Resch
+
+Dieses Programm ist freie Software: Sie können es unter den Bedingungen der
+[GNU General Public License](LICENSE), Version 3 oder (nach Ihrer Wahl) jeder späteren Version,
+weitergeben und/oder verändern. Es wird ohne jede Gewährleistung bereitgestellt.

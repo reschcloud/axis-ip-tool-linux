@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Package axis enthält die geräteunabhängige Logik: Suche, VAPIX-Client und Datenmodell.
 package axis
 

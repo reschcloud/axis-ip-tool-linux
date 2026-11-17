@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // axisctl – Kommandozeilenwerkzeug zum Finden und Konfigurieren von Axis-Geräten.
 package main
 

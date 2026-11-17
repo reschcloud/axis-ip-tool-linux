@@ -11,7 +11,7 @@ description: |
   Axis-Netzwerkkameras finden und einrichten.
   GNOME-App und Kommandozeilenwerkzeug (axisctl), angelehnt an die AXIS IP Utility.
   Kein offizielles Produkt der Axis Communications AB.
-license: MIT
+license: GPL-3.0-or-later
 homepage: https://github.com/reschcloud/axis-ip-tool-linux
 
 contents:
@@ -29,6 +29,8 @@ contents:
     dst: /usr/share/icons/hicolor/scalable/apps/io.github.reschcloud.AxisIpTool.svg
   - src: data/icons/hicolor/symbolic/apps/io.github.reschcloud.AxisIpTool-symbolic.svg
     dst: /usr/share/icons/hicolor/symbolic/apps/io.github.reschcloud.AxisIpTool-symbolic.svg
+  - src: LICENSE
+    dst: /usr/share/licenses/axis-ip-tool/LICENSE
 
 scripts:
   postinstall: packaging/scripts/app-postinstall.sh
