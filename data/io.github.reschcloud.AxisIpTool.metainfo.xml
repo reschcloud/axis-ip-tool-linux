@@ -40,6 +40,9 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-11-17">
+      <description><p>Configure many devices at once, login status with password check, factory reset, host name column.</p></description>
+    </release>
     <release version="0.1.0" date="2026-11-17">
       <description><p>First release: discovery, initial password, network, time/NTP, snapshot preview.</p></description>
     </release>
