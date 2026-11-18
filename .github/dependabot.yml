@@ -1,0 +1,23 @@
+# Dependabot: weekly update PRs for Go modules and GitHub Actions.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # Pinned to the libadwaita 1.5 branch so the build works on Ubuntu 24.04
+      # (GTK 4.14, GLib 2.80) – newer versions require GLib >= 2.86. See CLAUDE.md.
+      - dependency-name: github.com/diamondburned/gotk4/pkg
+      - dependency-name: github.com/diamondburned/gotk4-adwaita/pkg
+    groups:
+      go-modules:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

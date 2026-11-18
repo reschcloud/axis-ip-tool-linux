@@ -44,6 +44,10 @@ jobs:
       - name: Tests
         run: make test
 
+      - name: Vulnerability check (govulncheck)
+        if: matrix.goarch == 'amd64'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
       - name: Validate desktop file and metainfo
         run: |
           desktop-file-validate data/*.desktop
