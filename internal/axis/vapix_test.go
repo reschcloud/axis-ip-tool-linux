@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package axis
 
@@ -19,17 +19,18 @@ import (
 	"testing"
 )
 
-// fakeCamera simuliert die benötigten VAPIX-Endpunkte inkl. Digest-Auth.
+// fakeCamera simulates the required VAPIX endpoints incl. digest auth.
 type fakeCamera struct {
 	mu                 sync.Mutex
 	users              map[string]string
 	calls              []string
 	jsonBody           []map[string]any
-	locked             bool // basicdeviceinfo nur mit Anmeldung (AXIS OS 12 nach Einrichtung)
-	legacy             bool // alte Firmware: kein systemready.cgi, pwdgrp.cgi im Werkszustand offen
+	locked             bool // basicdeviceinfo only with login (AXIS OS 12 after setup)
+	legacy             bool // old firmware: no systemready.cgi, pwdgrp.cgi open in factory state
 	hostname           string
-	ignoreJSONHostname bool // wie manche AXIS OS 9: setHostnameConfiguration ohne Wirkung
+	ignoreJSONHostname bool // like some AXIS OS 9: setHostnameConfiguration has no effect
 	ntp                map[string]any
+	params             map[string]string // ImageSource./System. parameters (param.cgi)
 }
 
 func md5hex(s string) string { h := md5.Sum([]byte(s)); return hex.EncodeToString(h[:]) }
@@ -55,6 +56,13 @@ func (f *fakeCamera) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, r.Method+" "+r.URL.Path)
 	if r.URL.Path == "/axis-cgi/systemready.cgi" && !f.legacy {
+		// like P3225-VE Mk II: without "context" only "Invalid POST data"
+		var req map[string]any
+		body, _ := io.ReadAll(r.Body)
+		if json.Unmarshal(body, &req) != nil || req["context"] == nil {
+			io.WriteString(w, `{"apiVersion":"1.1","error":{"code":1000,"message":"Invalid POST data"}}`)
+			return
+		}
 		needs := "no"
 		if len(f.users) == 0 {
 			needs = "yes"
@@ -62,8 +70,8 @@ func (f *fakeCamera) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"apiVersion":"1.4","method":"systemready","data":{"systemready":"yes","needsetup":"`+needs+`"}}`)
 		return
 	}
-	// AXIS OS 11: pwdgrp.cgi?action=get verlangt auch im Werkszustand eine Anmeldung,
-	// Anlegen per POST geht ohne.
+	// AXIS OS 11: pwdgrp.cgi?action=get requires a login even in factory state,
+	// creating via POST works without.
 	pwdgrpOpen := r.URL.Path == "/axis-cgi/pwdgrp.cgi" && len(f.users) == 0 && (f.legacy || r.Method == http.MethodPost)
 	open := (r.URL.Path == "/axis-cgi/basicdeviceinfo.cgi" && !f.locked) || pwdgrpOpen
 	if !open && !f.authorized(r) {
@@ -120,11 +128,34 @@ func (f *fakeCamera) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.users = map[string]string{}
 		io.WriteString(w, "OK")
 	case "/axis-cgi/param.cgi":
-		if q := r.URL.Query(); q.Get("action") == "update" {
+		q := r.URL.Query() // query and POST form
+		if form, err := url.ParseQuery(string(body)); err == nil {
+			for k, v := range form {
+				q[k] = v
+			}
+		}
+		if q.Get("action") == "update" {
 			if h := q.Get("Network.HostName"); h != "" {
 				f.hostname = h
 			}
+			for k, v := range q {
+				if strings.HasPrefix(k, "ImageSource.") || strings.HasPrefix(k, "System.") {
+					if _, ok := f.params[k]; !ok {
+						io.WriteString(w, "# Error: Error setting '"+k+"' to '"+v[0]+"'!")
+						return
+					}
+					f.params[k] = v[0]
+				}
+			}
 			io.WriteString(w, "OK")
+			return
+		}
+		if q.Get("group") == "ImageSource" {
+			for k, v := range f.params {
+				if strings.HasPrefix(k, "ImageSource.") {
+					io.WriteString(w, "root."+k+"="+v+"\n")
+				}
+			}
 			return
 		}
 		io.WriteString(w, "root.Brand.Brand=AXIS\n")
@@ -136,7 +167,13 @@ func (f *fakeCamera) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func startFake(t *testing.T) (*fakeCamera, string, int) {
-	f := &fakeCamera{users: map[string]string{}, hostname: "cam1"}
+	f := &fakeCamera{users: map[string]string{}, hostname: "cam1", params: map[string]string{
+		// like P3225-VE Mk II (firmware 9.80) in factory state
+		"ImageSource.I0.CaptureFrequency":      "60Hz",
+		"ImageSource.I0.CameraTiltOrientation": "0",
+		"ImageSource.I0.Sensor.CaptureMode":    "1",
+		"System.CaptureFrequencySet":           "no",
+	}}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	host, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
@@ -160,11 +197,11 @@ func TestWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if needs, _ := anon.NeedsInitialUser(ctx); needs {
-		t.Fatal("NeedsInitialUser nach Setup = true")
+		t.Fatal("NeedsInitialUser after setup = true")
 	}
 
-	if err := NewClient(host, port, "root", "falsch").CheckLogin(ctx); err != ErrAuth {
-		t.Fatalf("falsches Passwort: %v", err)
+	if err := NewClient(host, port, "root", "wrong").CheckLogin(ctx); err != ErrAuth {
+		t.Fatalf("wrong password: %v", err)
 	}
 
 	c := NewClient(host, port, "root", "geheim123")
@@ -185,11 +222,11 @@ func TestWorkflow(t *testing.T) {
 	}
 	addrs := last["params"].(map[string]any)["staticAddressConfigurations"].([]any)
 	if addrs[0].(map[string]any)["address"] != "10.0.0.60" {
-		t.Fatalf("Adresse nicht übernommen: %v", addrs)
+		t.Fatalf("address not applied: %v", addrs)
 	}
 
 	if err := c.SetTime(ctx, "Mars/Olympus", false); err == nil || !strings.Contains(err.Error(), "Invalid time zone") {
-		t.Fatalf("API-Fehler nicht gemeldet: %v", err)
+		t.Fatalf("API error not reported: %v", err)
 	}
 }
 
@@ -200,12 +237,12 @@ func TestLockedInfoNTPSnapshot(t *testing.T) {
 	f.locked = true
 
 	if _, err := NewClient(host, port, "", "").BasicInfo(ctx); !errors.Is(err, ErrAuth) {
-		t.Fatalf("anonym gesperrt: %v", err)
+		t.Fatalf("locked anonymously: %v", err)
 	}
 	c := NewClient(host, port, "root", "geheim123")
 	info, err := c.BasicInfo(ctx)
 	if err != nil || info.Firmware != "11.11.73" {
-		t.Fatalf("BasicInfo mit Anmeldung = %+v, %v", info, err)
+		t.Fatalf("BasicInfo with login = %+v, %v", info, err)
 	}
 
 	n, err := c.GetNTP(ctx)
@@ -213,13 +250,13 @@ func TestLockedInfoNTPSnapshot(t *testing.T) {
 		t.Fatalf("GetNTP = %+v, %v", n, err)
 	}
 	if err := c.SetNTP(ctx, NTPConfig{Enabled: true}); err == nil {
-		t.Fatal("NTP ohne Server akzeptiert")
+		t.Fatal("NTP without server accepted")
 	}
 	if err := c.SetNTP(ctx, NTPConfig{Enabled: true, Servers: []string{"0.at.pool.ntp.org", "10.0.0.1"}}); err != nil {
 		t.Fatal(err)
 	}
 	if f.ntp["serversSource"] != "static" || len(f.ntp["staticServers"].([]any)) != 2 {
-		t.Fatalf("SetNTP sendete %v", f.ntp)
+		t.Fatalf("SetNTP sent %v", f.ntp)
 	}
 	if err := c.SetNTP(ctx, NTPConfig{Enabled: true, FromDHCP: true}); err != nil || f.ntp["serversSource"] != "DHCP" {
 		t.Fatalf("SetNTP DHCP: %v %v", f.ntp, err)
@@ -229,8 +266,8 @@ func TestLockedInfoNTPSnapshot(t *testing.T) {
 	if err != nil || !isJPEG(img) {
 		t.Fatalf("Snapshot = %v, %v", img, err)
 	}
-	if _, err := NewClient(host, port, "root", "falsch").Snapshot(ctx, 640); !errors.Is(err, ErrAuth) {
-		t.Fatalf("Snapshot falsches Passwort: %v", err)
+	if _, err := NewClient(host, port, "root", "wrong").Snapshot(ctx, 640); !errors.Is(err, ErrAuth) {
+		t.Fatalf("snapshot wrong password: %v", err)
 	}
 }
 
@@ -242,7 +279,7 @@ func TestValidate(t *testing.T) {
 	}
 	for _, c := range bad {
 		if c.Validate() == nil {
-			t.Errorf("erwartet Fehler für %+v", c)
+			t.Errorf("expected error for %+v", c)
 		}
 	}
 	ok := NetworkConfig{Address: "10.0.0.5", Prefix: 24, Gateway: "10.0.0.1", HostnameFromDHCP: true}
@@ -258,7 +295,7 @@ func TestHelpers(t *testing.T) {
 		}
 	}
 	if _, err := ParsePrefix("255.0.255.0"); err == nil {
-		t.Error("ungültige Maske akzeptiert")
+		t.Error("invalid mask accepted")
 	}
 	if PrefixToMask(20) != "255.255.240.0" {
 		t.Error(PrefixToMask(20))
@@ -303,20 +340,20 @@ func resetScheme(t *testing.T, port int) {
 func TestHTTPSPreferred(t *testing.T) {
 	ctx := context.Background()
 	f := &fakeCamera{users: map[string]string{"root": "geheim123"}}
-	srv := httptest.NewTLSServer(f) // selbst signiert, wie bei den Kameras
+	srv := httptest.NewTLSServer(f) // self-signed, like the cameras
 	t.Cleanup(srv.Close)
 	host, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
 	p, _ := strconv.Atoi(port)
 	resetScheme(t, p)
 
-	// HTTP-Port zeigt ins Leere – es darf nur HTTPS verwendet werden
+	// HTTP port points nowhere – only HTTPS may be used
 	c := NewClient(host, 1, "root", "geheim123")
 	info, err := c.BasicInfo(ctx)
 	if err != nil || info.Firmware != "11.11.73" {
-		t.Fatalf("BasicInfo über HTTPS = %+v, %v", info, err)
+		t.Fatalf("BasicInfo via HTTPS = %+v, %v", info, err)
 	}
 	if !c.Secure(ctx) {
-		t.Fatal("Client meldet keine HTTPS-Verbindung")
+		t.Fatal("client reports no HTTPS connection")
 	}
 	if d := (Device{IP: host, HTTPS: &[]bool{true}[0]}); !strings.HasPrefix(d.WebURL(), "https://") {
 		t.Fatal(d.WebURL())
@@ -325,8 +362,8 @@ func TestHTTPSPreferred(t *testing.T) {
 
 func TestHTTPFallbackAndHTTPSOnly(t *testing.T) {
 	ctx := context.Background()
-	_, host, port := startFake(t) // nur HTTP
-	// Port für HTTPS: ein sicher geschlossener Port
+	_, host, port := startFake(t) // HTTP only
+	// port for HTTPS: a port that is certainly closed
 	l, _ := net.Listen("tcp", "127.0.0.1:0")
 	closed := l.Addr().(*net.TCPAddr).Port
 	l.Close()
@@ -334,10 +371,10 @@ func TestHTTPFallbackAndHTTPSOnly(t *testing.T) {
 
 	c := NewClient(host, port, "", "")
 	if _, err := c.BasicInfo(ctx); err != nil {
-		t.Fatalf("Rückfall auf HTTP: %v", err)
+		t.Fatalf("fallback to HTTP: %v", err)
 	}
 	if c.Secure(ctx) {
-		t.Fatal("HTTP als sicher gemeldet")
+		t.Fatal("HTTP reported as secure")
 	}
 
 	SetHTTPSOnly(true)
@@ -345,12 +382,12 @@ func TestHTTPFallbackAndHTTPSOnly(t *testing.T) {
 		t.Fatalf("Nur HTTPS: %v", err)
 	}
 	no := false
-	if s := (Device{IP: host, Online: true, HTTPS: &no}).Status(); s != "Kein HTTPS" {
+	if s := (Device{IP: host, Online: true, HTTPS: &no}).Status(); s != StatusNoHTTPS {
 		t.Fatalf("Status = %s", s)
 	}
 }
 
-// Werkszustand bei AXIS OS 11 (systemready) und alter Firmware (pwdgrp-Heuristik).
+// Factory state with AXIS OS 11 (systemready) and old firmware (pwdgrp heuristic).
 func TestNeedsInitialUser(t *testing.T) {
 	ctx := context.Background()
 	for _, legacy := range []bool{false, true} {
@@ -358,25 +395,26 @@ func TestNeedsInitialUser(t *testing.T) {
 		f.legacy = legacy
 		anon := NewClient(host, port, "", "")
 		if needs, err := anon.NeedsInitialUser(ctx); err != nil || !needs {
-			t.Fatalf("legacy=%v: Werkszustand nicht erkannt: %v, %v", legacy, needs, err)
+			t.Fatalf("legacy=%v: factory state not detected: %v, %v", legacy, needs, err)
 		}
-		if err := NewClient(host, port, "root", "egal1234").CheckLogin(ctx); !errors.Is(err, ErrNoUser) {
-			t.Fatalf("legacy=%v: CheckLogin im Werkszustand = %v", legacy, err)
+		if err := NewClient(host, port, "root", "whatever1").CheckLogin(ctx); !errors.Is(err, ErrNoUser) {
+			t.Fatalf("legacy=%v: CheckLogin in factory state = %v", legacy, err)
 		}
 		if err := anon.CreateInitialUser(ctx, "admin", "geheim123"); err != nil {
 			t.Fatalf("legacy=%v: %v", legacy, err)
 		}
-		if needs, err := anon.NeedsInitialUser(ctx); err != nil || needs {
-			t.Fatalf("legacy=%v: nach Setup = %v, %v", legacy, needs, err)
+		// old firmware: 401 is ambiguous (newer firmware locks in factory state too)
+		if needs, err := anon.NeedsInitialUser(ctx); needs || (err != nil && !(legacy && errors.Is(err, ErrSetupUnknown))) {
+			t.Fatalf("legacy=%v: after setup = %v, %v", legacy, needs, err)
 		}
 		if err := anon.CreateInitialUser(ctx, "admin2", "geheim123"); !errors.Is(err, ErrHasUser) {
-			t.Fatalf("legacy=%v: zweites Erstpasswort = %v", legacy, err)
+			t.Fatalf("legacy=%v: second initial password = %v", legacy, err)
 		}
-		if err := NewClient(host, port, "admin", "falsch").CheckLogin(ctx); err != ErrAuth {
-			t.Fatalf("legacy=%v: falsches Passwort = %v", legacy, err)
+		if err := NewClient(host, port, "admin", "wrong").CheckLogin(ctx); err != ErrAuth {
+			t.Fatalf("legacy=%v: wrong password = %v", legacy, err)
 		}
 		if err := NewClient(host, port, "admin", "geheim123").CheckLogin(ctx); err != nil {
-			t.Fatalf("legacy=%v: richtiges Passwort = %v", legacy, err)
+			t.Fatalf("legacy=%v: correct password = %v", legacy, err)
 		}
 	}
 }
@@ -388,18 +426,18 @@ func TestFactoryReset(t *testing.T) {
 	if err := anon.CreateInitialUser(ctx, "root", "geheim123"); err != nil {
 		t.Fatal(err)
 	}
-	if err := NewClient(host, port, "root", "falsch").FactoryReset(ctx, true); !errors.Is(err, ErrAuth) {
-		t.Fatalf("Reset mit falschem Passwort = %v", err)
+	if err := NewClient(host, port, "root", "wrong").FactoryReset(ctx, true); !errors.Is(err, ErrAuth) {
+		t.Fatalf("reset with wrong password = %v", err)
 	}
 	if err := NewClient(host, port, "root", "geheim123").FactoryReset(ctx, true); err != nil {
 		t.Fatal(err)
 	}
 	if needs, err := anon.NeedsInitialUser(ctx); err != nil || !needs {
-		t.Fatalf("nach Reset kein Werkszustand: %v, %v", needs, err)
+		t.Fatalf("no factory state after reset: %v, %v", needs, err)
 	}
 }
 
-// AXIS OS 9: Hostname über network_settings.cgi ohne Wirkung → Rückfall auf param.cgi.
+// AXIS OS 9: hostname via network_settings.cgi has no effect → fallback to param.cgi.
 func TestHostnameFallback(t *testing.T) {
 	ctx := context.Background()
 	f, host, port := startFake(t)
@@ -410,11 +448,47 @@ func TestHostnameFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Hostname = "kamera-09"
+	cfg.Hostname = "camera-09"
 	if err := c.SetNetwork(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if f.hostname != "kamera-09" {
+	if f.hostname != "camera-09" {
 		t.Fatalf("Hostname = %q", f.hostname)
+	}
+}
+
+// Power line frequency/mounting position at commissioning; missing parameters (e.g. a
+// thermal camera without power line frequency) are skipped.
+func TestApplyInitialSetup(t *testing.T) {
+	ctx := context.Background()
+	f, host, port := startFake(t)
+	f.users["root"] = "geheim123"
+	c := NewClient(host, port, "root", "geheim123")
+	skipped, err := c.ApplyInitialSetup(ctx, InitialSetup{PowerFrequency: 50, Mount: MountCeiling})
+	if err != nil || len(skipped) != 0 {
+		t.Fatalf("ApplyInitialSetup = %v, %v", skipped, err)
+	}
+	want := map[string]string{"ImageSource.I0.CaptureFrequency": "50Hz",
+		"ImageSource.I0.CameraTiltOrientation": "-90", "System.CaptureFrequencySet": "yes"}
+	for k, v := range want {
+		if f.params[k] != v {
+			t.Errorf("%s = %q, expected %q", k, f.params[k], v)
+		}
+	}
+
+	delete(f.params, "ImageSource.I0.CaptureFrequency")
+	f.params["System.CaptureFrequencySet"] = "no"
+	skipped, err = c.ApplyInitialSetup(ctx, InitialSetup{PowerFrequency: 60, Mount: MountWall})
+	if err != nil || len(skipped) != 1 || skipped[0] != SettingPowerFrequency {
+		t.Fatalf("without power line frequency: %v, %v", skipped, err)
+	}
+	if f.params["ImageSource.I0.CameraTiltOrientation"] != "0" || f.params["System.CaptureFrequencySet"] != "no" {
+		t.Errorf("without power line frequency: %v", f.params)
+	}
+	if _, err := c.ApplyInitialSetup(ctx, InitialSetup{PowerFrequency: 55}); err == nil {
+		t.Error("55 Hz accepted")
+	}
+	if _, err := NewClient(host, port, "root", "wrong").ApplyInitialSetup(ctx, InitialSetup{Mount: MountDesk}); !errors.Is(err, ErrAuth) {
+		t.Errorf("wrong password = %v", err)
 	}
 }

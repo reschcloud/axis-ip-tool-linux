@@ -1,5 +1,5 @@
-# Flatpak-Manifest. Lokal bauen: `make flatpak` (lädt die Go-Module beim Bauen aus dem Netz).
-# Für Flathub müssten die Module vorab vendored werden (go mod vendor), weil dort ohne Netz gebaut wird.
+# Flatpak manifest. Build locally: `make flatpak` (downloads the Go modules during the build).
+# For Flathub the modules would have to be vendored first (go mod vendor) since it builds offline.
 id: io.github.reschcloud.AxisIpTool
 runtime: org.gnome.Platform
 runtime-version: '51'
@@ -13,9 +13,9 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --device=dri
-  # Kameras per HTTP ansprechen und SSDP-Suche
+  # talk to cameras via HTTP, SSDP discovery, ping
   - --share=network
-  # Bonjour/mDNS-Suche über den Avahi-Dienst des Systems
+  # Bonjour/mDNS discovery via the system's Avahi service
   - --system-talk-name=org.freedesktop.Avahi
 
 build-options:

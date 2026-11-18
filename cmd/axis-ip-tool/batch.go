@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package main
 
@@ -21,7 +21,7 @@ import (
 	"axis-ip-tool/internal/axis"
 )
 
-// Mehrfachkonfiguration: Einstellungen → Vorschau (editierbar) → Ausführung.
+// Batch configuration: settings → preview (editable) → execution.
 
 type batchDialog struct {
 	w    *window
@@ -34,7 +34,7 @@ type batchDialog struct {
 	plan     []axis.PlanRow
 	planName string
 	as       []axis.Assignment
-	inUse    map[string]bool // IP → antwortet bereits
+	inUse    map[string]bool // IP → already answers
 
 	toasts *adw.ToastOverlay
 }
@@ -48,14 +48,14 @@ func (w *window) onBatch() {
 		}
 	}
 	if len(b.devs) < 2 {
-		w.toast("Bitte mindestens zwei erreichbare Geräte auswählen")
+		w.toast("Please select at least two reachable devices")
 		return
 	}
 	for _, d := range w.reg.All() {
 		b.all = append(b.all, *d)
 	}
 	b.dlg = adw.NewDialog()
-	b.dlg.SetTitle("Mehrere Geräte konfigurieren")
+	b.dlg.SetTitle("Configure multiple devices")
 	b.dlg.SetContentWidth(720)
 	b.dlg.SetContentHeight(680)
 	b.nav = adw.NewNavigationView()
@@ -72,7 +72,7 @@ func (b *batchDialog) toast(msg string) {
 	b.toasts.AddToast(t)
 }
 
-// page baut eine Navigationsseite mit Kopfzeile und scrollbarem Inhalt.
+// page builds a navigation page with header bar and scrollable content.
 func page(title string, start, end gtk.Widgetter, content gtk.Widgetter) *adw.NavigationPage {
 	hb := adw.NewHeaderBar()
 	hb.SetShowEndTitleButtons(false)
@@ -110,7 +110,7 @@ func comboRow(title string, items ...string) *adw.ComboRow {
 	return r
 }
 
-// ---------------------------------------------------------------- Seite 1: Einstellungen
+// ---------------------------------------------------------------- Page 1: settings
 
 func (b *batchDialog) settingsPage() *adw.NavigationPage {
 	factory := 0
@@ -123,13 +123,13 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 	}
 
 	box := vbox()
-	summary := fmt.Sprintf("%d Geräte: %s", len(b.devs), strings.Join(names, ", "))
+	summary := fmt.Sprintf("%d devices: %s", len(b.devs), strings.Join(names, ", "))
 	if factory > 0 {
-		summary += fmt.Sprintf("\n%d davon im Werkszustand.", factory)
+		summary += fmt.Sprintf("\n%d of them in factory state.", factory)
 	}
 	box.Append(note(summary))
 
-	// Zugang: angemeldete Geräte verwenden ihre geprüften Zugangsdaten
+	// access: logged-in devices use their verified credentials
 	loggedIn := 0
 	for _, d := range b.devs {
 		if _, ok := b.w.creds[d.Key()]; ok && d.Unlocked {
@@ -137,46 +137,53 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 		}
 	}
 	needLogin := loggedIn < len(b.devs)
-	user := entryRow("Benutzername", "root")
+	user := entryRow("User name", "root")
 	if b.w.lastUser != "" {
 		user.SetText(b.w.lastUser)
 	}
-	pass := passwordRow("Passwort")
-	pass2 := passwordRow("Passwort wiederholen")
-	initPw := switchRow("Erstpasswort auf Geräten im Werkszustand setzen", factory > 0)
-	initPw.SetSubtitle("Legt den Benutzer oben als Administrator an")
+	pass := passwordRow("Password")
+	pass2 := passwordRow("Repeat password")
+	initPw := switchRow("Set initial password on devices in factory state", factory > 0)
+	initPw.SetSubtitle("Creates the user above as administrator")
 	initPw.SetVisible(factory > 0)
-	updPass2 := func() { pass2.SetVisible(initPw.Active()) }
+	freq, mount := setupRows()
+	freq.SetTitle("Also set power line frequency")
+	mount.SetTitle("Also set mounting position")
+	updPass2 := func() {
+		pass2.SetVisible(initPw.Active())
+		freq.SetVisible(initPw.Active())
+		mount.SetVisible(initPw.Active())
+	}
 	initPw.NotifyProperty("active", updPass2)
 	updPass2()
-	box.Append(heading("Zugang"))
+	box.Append(heading("Access"))
 	switch {
 	case !needLogin:
-		box.Append(note("Alle Geräte sind angemeldet – ihre gespeicherten Zugangsdaten werden verwendet."))
+		box.Append(note("All devices are logged in – their stored credentials are used."))
 	case loggedIn > 0:
-		box.Append(note(fmt.Sprintf("%d von %d Geräten sind angemeldet und verwenden ihre gespeicherten "+
-			"Zugangsdaten. Benutzer und Passwort unten gelten für die übrigen %d.",
+		box.Append(note(fmt.Sprintf("%d of %d devices are logged in and use their stored "+
+			"credentials. User and password below apply to the remaining %d.",
 			loggedIn, len(b.devs), len(b.devs)-loggedIn)))
 	}
 	if needLogin {
-		box.Append(boxedList(user, pass, pass2, initPw))
+		box.Append(boxedList(user, pass, pass2, initPw, freq, mount))
 	}
 
-	// Netzwerk
-	netMode := comboRow("IPv4", "nicht ändern", "per DHCP", "statisch, fortlaufend")
-	start := entryRow("Start-IP-Adresse", "")
-	mask := entryRow("Subnetzmaske / Präfix", "255.255.255.0")
-	gw := entryRow("Standard-Gateway", "")
-	dns1, dns2 := entryRow("DNS-Server 1 (leer = nicht ändern)", ""), entryRow("DNS-Server 2", "")
-	order := comboRow("Reihenfolge der Adressvergabe", "nach Seriennummer", "nach aktueller IP", "nach Name")
+	// network
+	netMode := comboRow("IPv4", "don't change", "via DHCP", "static, sequential")
+	start := entryRow("Start IP address", "")
+	mask := entryRow("Subnet mask / prefix", "255.255.255.0")
+	gw := entryRow("Default gateway", "")
+	dns1, dns2 := entryRow("DNS server 1 (empty = don't change)", ""), entryRow("DNS server 2", "")
+	order := comboRow("Order of address assignment", "by serial number", "by current IP", "by name")
 	csvRow := adw.NewActionRow()
-	csvRow.SetTitle("Zuordnung aus CSV-Datei")
-	csvRow.SetSubtitle("Spalten: Seriennummer; IP; Hostname – überschreibt Bereich und Muster")
-	csvBtn := gtk.NewButtonWithLabel("Laden …")
+	csvRow.SetTitle("Assignment from CSV file")
+	csvRow.SetSubtitle("Columns: serial number; IP; hostname – overrides range and pattern")
+	csvBtn := gtk.NewButtonWithLabel("Load …")
 	csvBtn.SetVAlign(gtk.AlignCenter)
 	csvClear := gtk.NewButtonFromIconName("edit-clear-symbolic")
 	csvClear.SetVAlign(gtk.AlignCenter)
-	csvClear.SetTooltipText("CSV-Plan verwerfen")
+	csvClear.SetTooltipText("Discard CSV plan")
 	csvClear.AddCSSClass("flat")
 	csvClear.SetVisible(false)
 	csvRow.AddSuffix(csvBtn)
@@ -192,14 +199,14 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 	}
 	netMode.NotifyProperty("selected", updNet)
 	updNet()
-	box.Append(heading("Netzwerk"))
+	box.Append(heading("Network"))
 	box.Append(boxedList(netMode, start, mask, gw, dns1, dns2, order, csvRow))
 
-	// Hostname
-	hostOn := switchRow("Hostnamen setzen", false)
-	pattern := entryRow("Name", "kamera-##")
+	// hostname
+	hostOn := switchRow("Set hostnames", false)
+	pattern := entryRow("Name", "camera-##")
 	first := adw.NewSpinRowWithRange(0, 9999, 1)
-	first.SetTitle("Startwert für #")
+	first.SetTitle("Start value for #")
 	first.SetValue(1)
 	insert := func(ph string) {
 		r := []rune(pattern.Text())
@@ -212,8 +219,8 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 		pattern.SetPosition(pos + len([]rune(ph)))
 	}
 	for _, p := range []struct{ ph, tip string }{
-		{"#", "Fortlaufende Nummer einfügen"},
-		{"@", "Letzte Zahl der IP-Adresse einfügen"},
+		{"#", "Insert sequential number"},
+		{"@", "Insert last octet of the IP address"},
 	} {
 		btn := gtk.NewButtonWithLabel(p.ph)
 		btn.SetTooltipText(p.tip)
@@ -223,14 +230,14 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 		btn.ConnectClicked(func() { insert(ph) })
 		pattern.AddSuffix(btn)
 	}
-	hostHelp := note("#  fortlaufende Nummer – ## ergibt 01, 02 …, ### ergibt 001, 002 …\n" +
-		"@  letzte Zahl der IP-Adresse – bei 10.0.0.20 also 20")
+	hostHelp := note("#  sequential number – ## gives 01, 02 …, ### gives 001, 002 …\n" +
+		"@  last octet of the IP address – 20 for 10.0.0.20")
 
-	// Live-Beispiel: so heißen die ausgewählten Geräte nachher
+	// live example: the names of the selected devices afterwards
 	exampleList := gtk.NewListBox()
 	exampleList.SetSelectionMode(gtk.SelectionNone)
 	exampleList.AddCSSClass("boxed-list")
-	exampleHead := heading("So werden die Geräte heißen")
+	exampleHead := heading("The devices will be named")
 	updExample := func() {
 		for c := exampleList.FirstChild(); c != nil; c = exampleList.FirstChild() {
 			exampleList.Remove(c)
@@ -246,7 +253,7 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 			}
 		}
 		as, err := axis.PlanBatch(b.devs, s, b.all)
-		if err != nil { // IP-Bereich (noch) unvollständig → ohne neue IPs
+		if err != nil { // IP range (still) incomplete → without new IPs
 			s.SetNetwork = false
 			as, _ = axis.PlanBatch(b.devs, s, b.all)
 		}
@@ -258,7 +265,7 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 		for i, a := range as {
 			if i == maxShown {
 				more := adw.NewActionRow()
-				more.SetTitle(fmt.Sprintf("… und %d weitere", len(as)-maxShown))
+				more.SetTitle(fmt.Sprintf("… and %d more", len(as)-maxShown))
 				more.AddCSSClass("dim-label")
 				exampleList.Append(more)
 				break
@@ -271,7 +278,7 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 			r.SetUseMarkup(false)
 			h := a.Hostname
 			if h == "" {
-				h = "(leer)"
+				h = "(empty)"
 			}
 			r.SetTitle(h)
 			r.AddCSSClass("property")
@@ -279,9 +286,9 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 			var problem string
 			switch {
 			case !axis.ValidHostname(a.Hostname):
-				problem = "Ungültig: nur a–z, 0–9 und „-“, höchstens 63 Zeichen, nicht mit „-“ beginnen oder enden"
+				problem = "Invalid: only a–z, 0–9 and \"-\", at most 63 characters, must not start or end with \"-\""
 			case count[a.Hostname] > 1:
-				problem = "Kommt mehrfach vor – # oder @ in den Namen aufnehmen"
+				problem = "Occurs more than once – include # or @ in the name"
 			}
 			icon := gtk.NewImageFromIconName("object-select-symbolic")
 			icon.AddCSSClass("success")
@@ -328,25 +335,25 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 	box.Append(exampleHead)
 	box.Append(exampleList)
 
-	// Zeit
-	tzOn := switchRow("Zeitzone setzen", false)
-	tz := entryRow("Zeitzone (IANA)", localTZ())
+	// time
+	tzOn := switchRow("Set time zone", false)
+	tz := entryRow("Time zone (IANA)", localTZ())
 	tz.SetSensitive(false)
 	tzOn.NotifyProperty("active", func() { tz.SetSensitive(tzOn.Active()) })
-	ntpMode := comboRow("NTP", "nicht ändern", "aus", "Server per DHCP", "diese Server")
-	ntpServers := entryRow("NTP-Server (kommagetrennt)", "pool.ntp.org")
+	ntpMode := comboRow("NTP", "don't change", "off", "servers via DHCP", "these servers")
+	ntpServers := entryRow("NTP servers (comma-separated)", "pool.ntp.org")
 	updNTP := func() { ntpServers.SetSensitive(ntpMode.Selected() == 3) }
 	ntpMode.NotifyProperty("selected", updNTP)
 	updNTP()
-	box.Append(heading("Datum & Zeit"))
+	box.Append(heading("Date & time"))
 	box.Append(boxedList(tzOn, tz, ntpMode, ntpServers))
 
-	// CSV laden
+	// load CSV
 	csvBtn.ConnectClicked(func() {
 		fd := gtk.NewFileDialog()
-		fd.SetTitle("CSV-Plan laden")
+		fd.SetTitle("Load CSV plan")
 		filter := gtk.NewFileFilter()
-		filter.SetName("CSV-Dateien")
+		filter.SetName("CSV files")
 		filter.AddPattern("*.csv")
 		filter.AddPattern("*.CSV")
 		filter.AddPattern("*.txt")
@@ -375,14 +382,14 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 				if r.IP != "" {
 					netMode.SetSelected(2)
 					if strings.TrimSpace(start.Text()) == "" {
-						start.SetText(r.IP) // nur für Subnetz und Prüfung
+						start.SetText(r.IP) // only for subnet and checks
 					}
 					break
 				}
 			}
 			for _, r := range rows {
 				if r.Hostname != "" {
-					hostOn.SetActive(false) // Hostnamen kommen aus der Datei
+					hostOn.SetActive(false) // hostnames come from the file
 					break
 				}
 			}
@@ -390,13 +397,13 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 	})
 	csvClear.ConnectClicked(func() {
 		b.plan, b.planName = nil, ""
-		csvRow.SetSubtitle("Spalten: Seriennummer; IP; Hostname – überschreibt Bereich und Muster")
+		csvRow.SetSubtitle("Columns: serial number; IP; hostname – overrides range and pattern")
 		csvClear.SetVisible(false)
 	})
 
-	next := gtk.NewButtonWithLabel("Weiter")
+	next := gtk.NewButtonWithLabel("Next")
 	next.AddCSSClass("suggested-action")
-	cancel := gtk.NewButtonWithLabel("Abbrechen")
+	cancel := gtk.NewButtonWithLabel("Cancel")
 	cancel.ConnectClicked(func() { b.dlg.Close() })
 	next.ConnectClicked(func() {
 		s := axis.BatchSettings{
@@ -408,15 +415,18 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 		if !needLogin {
 			s.User, s.Password, s.InitPassword = "", "", false
 		}
+		if s.InitPassword {
+			s.Setup = readSetup(freq, mount)
+		}
 		switch {
 		case needLogin && (s.User == "" || s.Password == ""):
-			b.toast("Benutzername und Passwort erforderlich")
+			b.toast("User name and password required")
 			return
 		case s.InitPassword && pass2.Text() != s.Password:
-			b.toast("Passwörter stimmen nicht überein")
+			b.toast("Passwords don't match")
 			return
 		case s.InitPassword && len(s.Password) < 8:
-			b.toast("Bitte mindestens 8 Zeichen für das Passwort verwenden")
+			b.toast("Please use at least 8 characters for the password")
 			return
 		}
 		switch netMode.Selected() {
@@ -458,7 +468,7 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 		}
 		if !s.SetNetwork && s.HostnamePattern == "" && s.TimeZone == "" && !s.SetNTP && b.plan == nil &&
 			!(s.InitPassword && factory > 0) {
-			b.toast("Es ist nichts zum Ändern ausgewählt")
+			b.toast("Nothing to change is selected")
 			return
 		}
 		as, err := axis.PlanBatch(b.devs, s, b.all)
@@ -468,7 +478,7 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 		}
 		if b.plan != nil {
 			if missing := axis.ApplyPlan(as, b.plan); len(missing) > 0 {
-				b.toast(fmt.Sprintf("%d Zeile(n) der CSV passen zu keinem ausgewählten Gerät", len(missing)))
+				b.toast(fmt.Sprintf("%d CSV row(s) don't match any selected device", len(missing)))
 			}
 			axis.CheckAssignments(as, s, b.all)
 		}
@@ -480,28 +490,28 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 		b.settings, b.as = s, as
 		b.nav.Push(b.previewPage())
 	})
-	return page("Einstellungen", cancel, next, box)
+	return page("Settings", cancel, next, box)
 }
 
-// ---------------------------------------------------------------- Seite 2: Vorschau
+// ---------------------------------------------------------------- Page 2: preview
 
 func (b *batchDialog) previewPage() *adw.NavigationPage {
 	s := b.settings
 	box := vbox()
-	box.Append(note("Adressen und Hostnamen lassen sich hier noch einzeln ändern. " +
-		"Konfiguriert wird erst mit „Konfigurieren“."))
+	box.Append(note("Addresses and hostnames can still be changed individually here. " +
+		"Nothing is configured until you click \"Configure\"."))
 
 	grid := gtk.NewGrid()
 	grid.SetColumnSpacing(12)
 	grid.SetRowSpacing(6)
-	for i, h := range []string{"Gerät", "IP bisher", "IP neu", "Hostname", ""} {
+	for i, h := range []string{"Device", "Current IP", "New IP", "Hostname", ""} {
 		l := gtk.NewLabel(h)
 		l.SetXAlign(0)
 		l.AddCSSClass("heading")
 		grid.Attach(l, i, 0, 1, 1)
 	}
 
-	apply := gtk.NewButtonWithLabel("Konfigurieren")
+	apply := gtk.NewButtonWithLabel("Configure")
 	apply.AddCSSClass("suggested-action")
 
 	hints := make([]*gtk.Label, len(b.as))
@@ -511,7 +521,7 @@ func (b *batchDialog) previewPage() *adw.NavigationPage {
 		for i, a := range b.as {
 			probs := a.Problems
 			if a.IP != "" && a.IP != a.Device.IP && b.inUse[a.IP] {
-				probs = append(probs, "Adresse antwortet bereits (belegt?)")
+				probs = append(probs, "address already answers (in use?)")
 			}
 			h := hints[i]
 			h.RemoveCSSClass("error")
@@ -566,7 +576,7 @@ func (b *batchDialog) previewPage() *adw.NavigationPage {
 		}
 		host := gtk.NewEntry()
 		host.SetText(a.Hostname)
-		host.SetPlaceholderText("unverändert")
+		host.SetPlaceholderText("unchanged")
 		host.SetWidthChars(16)
 
 		hint := gtk.NewLabel("")
@@ -595,31 +605,35 @@ func (b *batchDialog) previewPage() *adw.NavigationPage {
 
 	var steps []string
 	if s.InitPassword {
-		steps = append(steps, "Erstpasswort (Werkszustand)")
+		step := "Initial password"
+		if !s.Setup.Empty() {
+			step += ", " + s.Setup.String()
+		}
+		steps = append(steps, step+" (factory state)")
 	}
 	if s.TimeZone != "" {
-		steps = append(steps, "Zeitzone "+s.TimeZone)
+		steps = append(steps, "Time zone "+s.TimeZone)
 	}
 	if s.SetNTP {
 		switch {
 		case !s.NTP.Enabled:
-			steps = append(steps, "NTP aus")
+			steps = append(steps, "NTP off")
 		case s.NTP.FromDHCP:
-			steps = append(steps, "NTP per DHCP")
+			steps = append(steps, "NTP via DHCP")
 		default:
 			steps = append(steps, "NTP "+strings.Join(s.NTP.Servers, ", "))
 		}
 	}
 	if s.SetNetwork && s.DHCP {
-		steps = append(steps, "IPv4 per DHCP")
+		steps = append(steps, "IPv4 via DHCP")
 	} else if s.SetNetwork {
-		steps = append(steps, fmt.Sprintf("statische IPs /%d, Gateway %s", s.Prefix, dashIfEmpty(s.Gateway)))
+		steps = append(steps, fmt.Sprintf("static IPs /%d, gateway %s", s.Prefix, dashIfEmpty(s.Gateway)))
 	}
 	if len(s.DNS) > 0 {
 		steps = append(steps, "DNS "+strings.Join(s.DNS, ", "))
 	}
-	box.Append(heading("Wird auf jedem Gerät gesetzt"))
-	box.Append(note("• " + strings.Join(append(steps, "Hostname laut Tabelle (sofern angegeben)"), "\n• ")))
+	box.Append(heading("Set on every device"))
+	box.Append(note("• " + strings.Join(append(steps, "Hostname as in the table (if given)"), "\n• ")))
 
 	refresh()
 	for _, a := range b.as {
@@ -629,7 +643,7 @@ func (b *batchDialog) previewPage() *adw.NavigationPage {
 		run := b.runPage()
 		b.nav.Push(run)
 	})
-	return page("Vorschau", nil, apply, box)
+	return page("Preview", nil, apply, box)
 }
 
 func dashIfEmpty(s string) string {
@@ -639,11 +653,11 @@ func dashIfEmpty(s string) string {
 	return s
 }
 
-// ---------------------------------------------------------------- Seite 3: Ausführung
+// ---------------------------------------------------------------- Page 3: execution
 
 func (b *batchDialog) runPage() *adw.NavigationPage {
 	box := vbox()
-	status := gtk.NewLabel("Konfiguriere …")
+	status := gtk.NewLabel("Configuring …")
 	status.SetXAlign(0)
 	status.AddCSSClass("title-4")
 	box.Append(status)
@@ -676,16 +690,16 @@ func (b *batchDialog) runPage() *adw.NavigationPage {
 	box.Append(list)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	stop := gtk.NewButtonWithLabel("Abbrechen")
-	stop.SetTooltipText("Nach dem aktuellen Gerät anhalten")
+	stop := gtk.NewButtonWithLabel("Cancel")
+	stop.SetTooltipText("Stop after the current device")
 	stop.ConnectClicked(func() {
 		cancel()
 		stop.SetSensitive(false)
-		status.SetText("Wird nach dem aktuellen Gerät angehalten …")
+		status.SetText("Stopping after the current device …")
 	})
-	saveLog := gtk.NewButtonWithLabel("Protokoll speichern …")
+	saveLog := gtk.NewButtonWithLabel("Save log …")
 	saveLog.SetVisible(false)
-	closeBtn := gtk.NewButtonWithLabel("Schließen")
+	closeBtn := gtk.NewButtonWithLabel("Close")
 	closeBtn.AddCSSClass("suggested-action")
 	closeBtn.SetVisible(false)
 	end := gtk.NewBox(gtk.OrientationHorizontal, 6)
@@ -693,7 +707,7 @@ func (b *batchDialog) runPage() *adw.NavigationPage {
 	end.Append(stop)
 	end.Append(closeBtn)
 
-	pg := page("Ausführung", nil, end, box)
+	pg := page("Execution", nil, end, box)
 	pg.SetCanPop(false)
 	b.dlg.SetCanClose(false)
 
@@ -722,7 +736,7 @@ func (b *batchDialog) runPage() *adw.NavigationPage {
 					} else {
 						r.icon.SetFromIconName("object-select-symbolic")
 						r.icon.AddCSSClass("success")
-						r.row.SetSubtitle(prefix + " · fertig")
+						r.row.SetSubtitle(prefix + " · done")
 					}
 				}
 			})
@@ -751,9 +765,9 @@ func (b *batchDialog) runPage() *adw.NavigationPage {
 				}
 			}
 			if failed == 0 {
-				status.SetText(fmt.Sprintf("Alle %d Geräte konfiguriert", len(res)))
+				status.SetText(fmt.Sprintf("All %d devices configured", len(res)))
 			} else {
-				status.SetText(fmt.Sprintf("%d von %d Geräten konfiguriert, %d fehlgeschlagen",
+				status.SetText(fmt.Sprintf("%d of %d devices configured, %d failed",
 					len(res)-failed, len(res), failed))
 			}
 			stop.SetVisible(false)
@@ -763,7 +777,7 @@ func (b *batchDialog) runPage() *adw.NavigationPage {
 			saveLog.ConnectClicked(func() { b.saveLog(res) })
 			closeBtn.ConnectClicked(func() { b.dlg.Close() })
 			b.dlg.ConnectClosed(func() {
-				// IPs haben sich geändert – neu suchen, sobald die Geräte umgestellt sind
+				// IPs have changed – search again once the devices have switched
 				glib.TimeoutSecondsAdd(5, func() { b.w.rescan() })
 			})
 		})
@@ -773,8 +787,8 @@ func (b *batchDialog) runPage() *adw.NavigationPage {
 
 func (b *batchDialog) saveLog(res []axis.BatchResult) {
 	fd := gtk.NewFileDialog()
-	fd.SetTitle("Protokoll speichern")
-	fd.SetInitialName("axis-konfiguration-" + time.Now().Format("2006-01-02-1504") + ".csv")
+	fd.SetTitle("Save log")
+	fd.SetInitialName("axis-configuration-" + time.Now().Format("2006-01-02-1504") + ".csv")
 	fd.Save(context.Background(), &b.w.Window, func(r gio.AsyncResulter) {
 		f, err := fd.SaveFinish(r)
 		if err != nil || f == nil {
@@ -785,9 +799,9 @@ func (b *batchDialog) saveLog(res []axis.BatchResult) {
 			err = os.WriteFile(f.Path(), buf.Bytes(), 0o644)
 		}
 		if err != nil {
-			b.toast("Protokoll nicht gespeichert: " + err.Error())
+			b.toast("Log not saved: " + err.Error())
 		} else {
-			b.toast("Protokoll gespeichert")
+			b.toast("Log saved")
 		}
 	})
 }

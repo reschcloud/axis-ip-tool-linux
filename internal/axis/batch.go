@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package axis
 
@@ -18,47 +18,49 @@ import (
 	"time"
 )
 
-// ---------------------------------------------------------------- Einstellungen
+// ---------------------------------------------------------------- Settings
 
-// BatchSettings sind die gemeinsamen Einstellungen einer Mehrfachkonfiguration.
-// Leere Felder bzw. false bei Set* bedeuten „nicht ändern“.
+// BatchSettings are the shared settings of a batch configuration.
+// Empty fields or false for Set* mean "don't change".
 type BatchSettings struct {
 	User, Password string
-	InitPassword   bool // auf Geräten im Werkszustand den ersten Administrator anlegen
+	InitPassword   bool // create the first administrator on devices in factory state
+	// image settings only for devices on which the initial password was just set
+	Setup InitialSetup
 
 	SetNetwork bool
 	DHCP       bool
-	StartIP    string // erste Adresse des Bereichs (statisch)
+	StartIP    string // first address of the range (static)
 	Prefix     int
 	Gateway    string
-	DNS        []string // leer = DNS-Einstellung nicht ändern (bei DHCP: per DHCP)
+	DNS        []string // empty = don't change the DNS setting (with DHCP: via DHCP)
 
-	HostnamePattern string // z. B. "kamera-##" (# Nummer, @ letzte IP-Zahl); leer = nicht ändern
-	FirstNumber     int    // Startwert für #
+	HostnamePattern string // e.g. "camera-##" (# number, @ last IP octet); empty = don't change
+	FirstNumber     int    // start value for #
 
-	TimeZone string // leer = nicht ändern
+	TimeZone string // empty = don't change
 	SetNTP   bool
 	NTP      NTPConfig
 
-	Order string // Reihenfolge der IP-Vergabe: "serial" (Standard), "ip", "name"
+	Order string // order of IP assignment: "serial" (default), "ip", "name"
 }
 
-// Assignment ist der geplante Zielzustand eines Geräts.
+// Assignment is the planned target state of a device.
 type Assignment struct {
 	Device   Device
-	IP       string // neue statische IPv4 ("" bei DHCP oder ohne Netzwerkänderung)
-	Hostname string // neuer Hostname ("" = unverändert)
-	User     string // eigene, bereits geprüfte Zugangsdaten dieses Geräts ("" = die aus BatchSettings)
+	IP       string // new static IPv4 ("" with DHCP or without network change)
+	Hostname string // new hostname ("" = unchanged)
+	User     string // this device's own, already verified credentials ("" = those from BatchSettings)
 	Password string
 	Problems []string
 }
 
-// Ok: keine Probleme gefunden.
+// Ok: no problems found.
 func (a Assignment) Ok() bool { return len(a.Problems) == 0 }
 
 // ---------------------------------------------------------------- Planung
 
-// SortDevices bringt die Geräte in die Reihenfolge der IP-Vergabe.
+// SortDevices puts the devices in the order of IP assignment.
 func SortDevices(devs []Device, order string) {
 	key := func(d Device) string { return d.Serial }
 	less := func(a, b string) bool { return a < b }
@@ -71,8 +73,8 @@ func SortDevices(devs []Device, order string) {
 	sort.SliceStable(devs, func(i, j int) bool { return less(key(devs[i]), key(devs[j])) })
 }
 
-// PlanBatch verteilt IP-Adressen und Hostnamen auf devs. all sind alle bekannten
-// Geräte im Netz (für die Konfliktprüfung); devs dürfen darin enthalten sein.
+// PlanBatch distributes IP addresses and hostnames to devs. all are all known devices
+// on the network (for conflict checks); devs may be contained in it.
 func PlanBatch(devs []Device, s BatchSettings, all []Device) ([]Assignment, error) {
 	devs = append([]Device(nil), devs...)
 	SortDevices(devs, s.Order)
@@ -84,10 +86,10 @@ func PlanBatch(devs []Device, s BatchSettings, all []Device) ([]Assignment, erro
 	if s.SetNetwork && !s.DHCP {
 		start, err := netip.ParseAddr(strings.TrimSpace(s.StartIP))
 		if err != nil || !start.Is4() {
-			return nil, fmt.Errorf("ungültige Start-IP %q", s.StartIP)
+			return nil, fmt.Errorf("invalid start IP %q", s.StartIP)
 		}
 		if s.Prefix < 1 || s.Prefix > 30 {
-			return nil, fmt.Errorf("ungültiges Präfix /%d", s.Prefix)
+			return nil, fmt.Errorf("invalid prefix /%d", s.Prefix)
 		}
 		pfx := netip.PrefixFrom(start, s.Prefix).Masked()
 		taken := map[string]bool{}
@@ -109,7 +111,7 @@ func PlanBatch(devs []Device, s BatchSettings, all []Device) ([]Assignment, erro
 				ip = ip.Next()
 			}
 			if !ip.IsValid() || !pfx.Contains(ip) {
-				return nil, fmt.Errorf("Adressbereich ab %s/%d reicht nur für %d von %d Geräten",
+				return nil, fmt.Errorf("address range from %s/%d is only enough for %d of %d devices",
 					start, s.Prefix, i, len(as))
 			}
 			as[i].IP = ip.String()
@@ -120,7 +122,7 @@ func PlanBatch(devs []Device, s BatchSettings, all []Device) ([]Assignment, erro
 	if s.HostnamePattern != "" {
 		for i := range as {
 			ip := as[i].IP
-			if ip == "" { // keine neue feste Adresse → @ aus der bisherigen
+			if ip == "" { // no new static address → @ from the current one
 				ip = as[i].Device.IP
 			}
 			as[i].Hostname = ExpandHostname(s.HostnamePattern, s.FirstNumber+i, ip)
@@ -145,12 +147,12 @@ func isNetOrBroadcast(ip netip.Addr, pfx netip.Prefix) bool {
 
 var hashRe = regexp.MustCompile(`#+`)
 
-// ExpandHostname bildet einen Hostnamen aus dem Muster:
+// ExpandHostname builds a hostname from the pattern:
 //
-//	#   fortlaufende Nummer; mehrere # = Mindeststellen mit führenden Nullen (## → 01, 02 …)
-//	@   letzte Zahl der IPv4-Adresse (10.0.0.20 → 20)
+//	#   sequential number; several # = minimum digits with leading zeros (## → 01, 02 …)
+//	@   last octet of the IPv4 address (10.0.0.20 → 20)
 //
-// Der Rest ist fester Text; Großbuchstaben, Leerzeichen, „_“ und Umlaute werden angepasst.
+// The rest is fixed text; upper case, spaces, "_" and umlauts are adjusted.
 func ExpandHostname(pattern string, nr int, ip string) string {
 	s := hashRe.ReplaceAllStringFunc(pattern, func(m string) string {
 		return fmt.Sprintf("%0*d", len(m), nr)
@@ -167,10 +169,10 @@ func ExpandHostname(pattern string, nr int, ip string) string {
 
 var hostnameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
-// ValidHostname prüft einen einzelnen Hostnamen (ohne Domain) nach RFC 1123.
+// ValidHostname checks a single hostname (without domain) according to RFC 1123.
 func ValidHostname(h string) bool { return hostnameRe.MatchString(h) }
 
-// CheckAssignments prüft die (ggf. von Hand geänderten) Zuordnungen und setzt Problems.
+// CheckAssignments checks the (possibly manually edited) assignments and sets Problems.
 func CheckAssignments(as []Assignment, s BatchSettings, all []Device) {
 	var pfx netip.Prefix
 	if start, err := netip.ParseAddr(strings.TrimSpace(s.StartIP)); err == nil && s.Prefix > 0 {
@@ -199,35 +201,35 @@ func CheckAssignments(as []Assignment, s BatchSettings, all []Device) {
 			ip, err := netip.ParseAddr(a.IP)
 			switch {
 			case a.IP == "":
-				add("keine IP-Adresse")
+				add("no IP address")
 			case err != nil || !ip.Is4():
-				add("ungültige IP-Adresse")
+				add("invalid IP address")
 			default:
 				if pfx.IsValid() && !pfx.Contains(ip) {
-					add("außerhalb von %s", pfx)
+					add("outside of %s", pfx)
 				} else if pfx.IsValid() && isNetOrBroadcast(ip, pfx) {
-					add("Netz- oder Broadcast-Adresse")
+					add("network or broadcast address")
 				}
 				if ip.String() == s.Gateway {
-					add("ist das Gateway")
+					add("is the gateway")
 				}
 				if ips[a.IP] > 1 {
-					add("IP mehrfach vergeben")
+					add("IP assigned more than once")
 				}
 				if o, ok := owner[a.IP]; ok && o.Key() != a.Device.Key() {
-					add("IP gehört derzeit %s", deviceLabel(o))
+					add("IP currently belongs to %s", deviceLabel(o))
 				}
 			}
 		}
 		if a.Hostname != "" {
 			if !ValidHostname(a.Hostname) {
-				add("ungültiger Hostname (a–z, 0–9, „-“, max. 63 Zeichen)")
+				add("invalid hostname (a–z, 0–9, \"-\", max. 63 characters)")
 			} else if hosts[a.Hostname] > 1 {
-				add("Hostname mehrfach vergeben")
+				add("hostname assigned more than once")
 			}
 		}
 		if a.Device.NeedsSetup != nil && *a.Device.NeedsSetup && !s.InitPassword {
-			add("Werkszustand – Erstpasswort setzen aktivieren")
+			add("factory state – enable \"set initial password\"")
 		}
 	}
 }
@@ -242,8 +244,8 @@ func deviceLabel(d Device) string {
 	return d.IP
 }
 
-// AddressInUse prüft, ob unter ip schon ein Gerät antwortet (TCP 80/443 erreichbar
-// oder aktiv abgelehnt). Ohne Antwort gilt die Adresse als frei.
+// AddressInUse checks whether a device already answers at ip (TCP 80/443 reachable
+// or actively refused). Without an answer the address is considered free.
 func AddressInUse(ctx context.Context, ip string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
 	defer cancel()
@@ -277,20 +279,20 @@ func isRefused(err error) bool {
 
 // ---------------------------------------------------------------- CSV-Plan
 
-// PlanRow ist eine Zeile eines CSV-Plans: Seriennummer → IP und/oder Hostname.
+// PlanRow is a row of a CSV plan: serial number → IP and/or hostname.
 type PlanRow struct {
 	Serial, IP, Hostname string
 }
 
-// ParsePlanCSV liest einen Plan mit den Spalten Seriennummer, IP, Hostname.
-// Trennzeichen „;“, „,“ oder Tab; eine Kopfzeile ist optional und darf die Spalten
-// in beliebiger Reihenfolge benennen.
+// ParsePlanCSV reads a plan with the columns serial number, IP, hostname.
+// Separator ";", "," or tab; a header row is optional and may name the columns
+// in any order (English or German names).
 func ParsePlanCSV(r io.Reader) ([]PlanRow, error) {
 	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
 	if err != nil {
 		return nil, err
 	}
-	text := strings.TrimPrefix(string(data), "\ufeff") // BOM aus Excel
+	text := strings.TrimPrefix(string(data), "\ufeff") // BOM from Excel
 	first, _, _ := strings.Cut(text, "\n")
 	sep := ';'
 	if strings.Count(first, "\t") > strings.Count(first, string(sep)) {
@@ -318,7 +320,7 @@ func ParsePlanCSV(r io.Reader) ([]PlanRow, error) {
 			}
 		}
 		if col["serial"] < 0 {
-			return nil, errors.New("CSV: Spalte „Seriennummer“ fehlt in der Kopfzeile")
+			return nil, errors.New("CSV: column \"serial\" missing in the header row")
 		}
 		recs = recs[1:]
 	}
@@ -335,19 +337,19 @@ func ParsePlanCSV(r io.Reader) ([]PlanRow, error) {
 		}
 		serial := NormMAC(get(rec, "serial"))
 		if serial == "" {
-			return nil, fmt.Errorf("CSV Zeile %d: keine gültige Seriennummer %q", n+1, get(rec, "serial"))
+			return nil, fmt.Errorf("CSV line %d: no valid serial number %q", n+1, get(rec, "serial"))
 		}
 		ip, _, _ := strings.Cut(get(rec, "ip"), "/")
 		rows = append(rows, PlanRow{Serial: serial, IP: ip, Hostname: strings.ToLower(get(rec, "hostname"))})
 	}
 	if len(rows) == 0 {
-		return nil, errors.New("CSV enthält keine Geräte")
+		return nil, errors.New("CSV contains no devices")
 	}
 	return rows, nil
 }
 
-// ApplyPlan übernimmt IP und Hostname aus rows (nach Seriennummer) und liefert die
-// Seriennummern aus rows, die unter as nicht vorkommen.
+// ApplyPlan takes IP and hostname from rows (by serial number) and returns the serial
+// numbers from rows that don't occur in as.
 func ApplyPlan(as []Assignment, rows []PlanRow) (missing []string) {
 	idx := map[string]int{}
 	for i, a := range as {
@@ -369,10 +371,10 @@ func ApplyPlan(as []Assignment, rows []PlanRow) (missing []string) {
 	return missing
 }
 
-// ---------------------------------------------------------------- Ausführung
+// ---------------------------------------------------------------- Execution
 
-// BatchEvent meldet den Fortschritt eines Geräts. Step ist der aktuelle Schritt;
-// Done = Gerät fertig (Err == nil: erfolgreich).
+// BatchEvent reports the progress of a device. Step is the current step;
+// Done = device finished (Err == nil: successful).
 type BatchEvent struct {
 	Index int
 	Step  string
@@ -380,14 +382,14 @@ type BatchEvent struct {
 	Err   error
 }
 
-// BatchResult ist das Ergebnis eines Geräts.
+// BatchResult is the result of a device.
 type BatchResult struct {
 	Assignment
 	Err error
 }
 
-// RunBatch konfiguriert die Geräte nacheinander. Ein Fehler bei einem Gerät hält die
-// übrigen nicht auf. progress wird aus dieser Goroutine aufgerufen.
+// RunBatch configures the devices one after another. An error on one device doesn't
+// stop the others. progress is called from this goroutine.
 func RunBatch(ctx context.Context, as []Assignment, s BatchSettings, progress func(BatchEvent)) []BatchResult {
 	res := make([]BatchResult, len(as))
 	for i, a := range as {
@@ -410,12 +412,15 @@ func RunBatch(ctx context.Context, as []Assignment, s BatchSettings, progress fu
 func configureOne(ctx context.Context, a Assignment, s BatchSettings, step func(string)) error {
 	d := a.Device
 	if d.IP == "" {
-		return errors.New("Gerät hat keine erreichbare Adresse")
+		return errors.New("device has no reachable address")
 	}
 	anon := NewClient(d.IP, d.Port, "", "")
 	needs, err := anon.NeedsInitialUser(ctx)
+	if errors.Is(err, ErrSetupUnknown) {
+		needs, err = false, nil // cannot be determined → log in; fails with ErrNoUser if necessary
+	}
 	if err != nil {
-		return fmt.Errorf("nicht erreichbar: %w", err)
+		return fmt.Errorf("not reachable: %w", err)
 	}
 	user, pass := s.User, s.Password
 	if a.User != "" && !needs {
@@ -423,28 +428,34 @@ func configureOne(ctx context.Context, a Assignment, s BatchSettings, step func(
 	}
 	if needs {
 		if !s.InitPassword {
-			return errors.New("Werkszustand – kein Erstpasswort angefordert")
+			return errors.New("factory state – no initial password requested")
 		}
 		if s.User == "" || s.Password == "" {
-			return errors.New("Werkszustand – kein Benutzer/Passwort für das Erstpasswort angegeben")
+			return errors.New("factory state – no user/password given for the initial password")
 		}
-		step("Erstpasswort")
+		step("Initial password")
 		if err := anon.CreateInitialUser(ctx, s.User, s.Password); err != nil {
-			return fmt.Errorf("Erstpasswort: %w", err)
+			return fmt.Errorf("initial password: %w", err)
 		}
 	}
 	if user == "" || pass == "" {
-		return errors.New("keine Zugangsdaten für dieses Gerät")
+		return errors.New("no credentials for this device")
 	}
 	c := NewClient(d.IP, d.Port, user, pass)
-	step("Anmeldung")
+	step("Login")
 	if err := c.CheckLogin(ctx); err != nil {
-		return fmt.Errorf("Anmeldung: %w", err)
+		return fmt.Errorf("login: %w", err)
+	}
+	if needs && !s.Setup.Empty() {
+		step("Power frequency/mounting")
+		if _, err := c.ApplyInitialSetup(ctx, s.Setup); err != nil {
+			return fmt.Errorf("power line frequency/mounting position: %w", err)
+		}
 	}
 	if s.TimeZone != "" {
-		step("Zeitzone")
+		step("Time zone")
 		if err := c.SetTime(ctx, s.TimeZone, false); err != nil {
-			return fmt.Errorf("Zeitzone: %w", err)
+			return fmt.Errorf("time zone: %w", err)
 		}
 	}
 	if s.SetNTP {
@@ -458,16 +469,16 @@ func configureOne(ctx context.Context, a Assignment, s BatchSettings, step func(
 		}
 	}
 	if s.SetNetwork || a.Hostname != "" {
-		step("Netzwerk")
+		step("Network")
 		cfg, err := c.GetNetwork(ctx)
 		if err != nil {
-			return fmt.Errorf("Netzwerk lesen: %w", err)
+			return fmt.Errorf("reading network: %w", err)
 		}
 		if s.SetNetwork {
 			cfg.DHCP = s.DHCP
 			if !s.DHCP {
 				if a.IP == "" {
-					return errors.New("keine IP-Adresse geplant")
+					return errors.New("no IP address planned")
 				}
 				cfg.Address, cfg.Prefix, cfg.Gateway = a.IP, s.Prefix, s.Gateway
 			}
@@ -481,21 +492,21 @@ func configureOne(ctx context.Context, a Assignment, s BatchSettings, step func(
 			cfg.HostnameFromDHCP, cfg.Hostname = false, a.Hostname
 		}
 		if err := c.SetNetwork(ctx, cfg); err != nil {
-			return fmt.Errorf("Netzwerk: %w", err)
+			return fmt.Errorf("network: %w", err)
 		}
 	}
 	return nil
 }
 
-// WriteResultsCSV schreibt ein Protokoll (Semikolon-getrennt, für Tabellenkalkulationen).
+// WriteResultsCSV writes a log (semicolon-separated, for spreadsheets).
 func WriteResultsCSV(w io.Writer, res []BatchResult) error {
 	cw := csv.NewWriter(w)
 	cw.Comma = ';'
-	cw.Write([]string{"Seriennummer", "Modell", "Alte IP", "Neue IP", "Hostname", "Ergebnis"})
+	cw.Write([]string{"Serial", "Model", "Old IP", "New IP", "Hostname", "Result"})
 	for _, r := range res {
 		result := "OK"
 		if r.Err != nil {
-			result = "Fehler: " + r.Err.Error()
+			result = "Error: " + r.Err.Error()
 		}
 		cw.Write([]string{r.Device.Serial, r.Device.Model, r.Device.IP, r.IP, r.Hostname, result})
 	}

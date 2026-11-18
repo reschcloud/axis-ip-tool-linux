@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package main
 
@@ -16,31 +16,33 @@ import (
 	"axis-ip-tool/internal/axis"
 )
 
-const batchUsage = `axisctl batch – mehrere Geräte nacheinander konfigurieren
+const batchUsage = `axisctl batch – configure several devices one after another
 
-Aufruf: axisctl batch [Optionen] [GERÄT …]
-  GERÄT = Seriennummer oder aktuelle IP. Ohne Angabe: alle Geräte aus -csv.
+Usage: axisctl batch [options] [DEVICE …]
+  DEVICE = serial number or current IP. None given: all devices from -csv.
 
-Zugang:
-  -u root                 Benutzer (Passwort aus $AXIS_PASSWORD oder Abfrage)
-  -init                   auf Geräten im Werkszustand den ersten Administrator anlegen
-Netzwerk (weglassen = unverändert):
-  -dhcp                   IPv4 per DHCP
-  -ip START/PRÄFIX        fortlaufende statische Adressen, z. B. 10.0.0.20/24
-  -gw G  -dns A,B         Gateway, DNS-Server
-  -order serial|ip|name   Reihenfolge der Adressvergabe (Standard serial)
-  -csv PLAN               Zuordnung aus CSV: Seriennummer;IP;Hostname (überschreibt -ip/-hostname)
-Hostname, Zeit:
-  -hostname MUSTER        # = fortlaufende Nummer (## → 01, 02 …), @ = letzte Zahl der IP,
-                          z. B. kamera-## oder cam-@
-  -nr 1                   Startwert für #
-  -tz Europe/Vienna       Zeitzone
+Access:
+  -u root                 user (password from $AXIS_PASSWORD or prompt)
+  -init                   create the first administrator on devices in factory state
+  -freq 50                also set the power line frequency (50, 60; 0 = don't change)
+  -mount ceiling          also set the mounting position (ceiling, wall, desk, none)
+Network (omit = unchanged):
+  -dhcp                   IPv4 via DHCP
+  -ip START/PREFIX        sequential static addresses, e.g. 10.0.0.20/24
+  -gw G  -dns A,B         gateway, DNS servers
+  -order serial|ip|name   order of address assignment (default serial)
+  -csv PLAN               assignment from CSV: serial;IP;hostname (overrides -ip/-hostname)
+Hostname, time:
+  -hostname PATTERN       # = sequential number (## → 01, 02 …), @ = last octet of the IP,
+                          e.g. camera-## or cam-@
+  -nr 1                   start value for #
+  -tz Europe/Vienna       time zone
   -ntp dhcp|off|S1,S2     NTP
-Ablauf:
-  -t 5s                   Suchdauer
-  -dry-run                nur den Plan anzeigen
-  -y                      ohne Rückfrage ausführen
-  -log DATEI.csv          Protokoll schreiben
+Run:
+  -t 5s                   discovery duration
+  -dry-run                only show the plan
+  -y                      run without confirmation
+  -log FILE.csv           write a log
 `
 
 func cmdBatch(ctx context.Context, args []string) error {
@@ -48,6 +50,8 @@ func cmdBatch(ctx context.Context, args []string) error {
 	fs.Usage = func() { fmt.Fprint(os.Stderr, batchUsage) }
 	user := fs.String("u", "root", "")
 	initPw := fs.Bool("init", false, "")
+	freq := fs.Int("freq", 50, "")
+	mount := fs.String("mount", "ceiling", "")
 	dhcp := fs.Bool("dhcp", false, "")
 	ipRange := fs.String("ip", "", "")
 	gw := fs.String("gw", "", "")
@@ -66,15 +70,22 @@ func cmdBatch(ctx context.Context, args []string) error {
 
 	s := axis.BatchSettings{User: *user, InitPassword: *initPw, Order: *order,
 		HostnamePattern: *host, FirstNumber: *nr, TimeZone: *tz}
+	if *initPw {
+		setup, err := setupFlags(*freq, *mount)
+		if err != nil {
+			return err
+		}
+		s.Setup = setup
+	}
 	switch {
 	case *dhcp && *ipRange != "":
-		return errors.New("-dhcp und -ip schließen sich aus")
+		return errors.New("-dhcp and -ip are mutually exclusive")
 	case *dhcp:
 		s.SetNetwork, s.DHCP = true, true
 	case *ipRange != "":
 		a, p, ok := strings.Cut(*ipRange, "/")
 		if !ok {
-			return errors.New("-ip braucht ein Präfix, z. B. 10.0.0.20/24")
+			return errors.New("-ip needs a prefix, e.g. 10.0.0.20/24")
 		}
 		prefix, err := axis.ParsePrefix(p)
 		if err != nil {
@@ -88,7 +99,7 @@ func cmdBatch(ctx context.Context, args []string) error {
 	if *ntp != "" {
 		s.SetNTP = true
 		switch strings.ToLower(*ntp) {
-		case "off", "aus":
+		case "off":
 			s.NTP = axis.NTPConfig{Enabled: false}
 		case "dhcp":
 			s.NTP = axis.NTPConfig{Enabled: true, FromDHCP: true}
@@ -109,15 +120,15 @@ func cmdBatch(ctx context.Context, args []string) error {
 			return err
 		}
 		if !s.SetNetwork && planHasIP(plan) {
-			return errors.New("der CSV-Plan enthält IP-Adressen – bitte -ip START/PRÄFIX angeben " +
-				"(Präfix und Bereichsprüfung), z. B. -ip 10.0.0.1/24")
+			return errors.New("the CSV plan contains IP addresses – please specify -ip START/PREFIX " +
+				"(prefix and range check), e.g. -ip 10.0.0.1/24")
 		}
 	}
 	if !s.SetNetwork && !s.SetNTP && s.TimeZone == "" && s.HostnamePattern == "" && plan == nil && !s.InitPassword {
-		return errors.New("nichts zu tun – siehe axisctl batch -h")
+		return errors.New("nothing to do – see axisctl batch -h")
 	}
 
-	fmt.Fprintln(os.Stderr, "Suche Geräte …")
+	fmt.Fprintln(os.Stderr, "Discovering devices …")
 	all, err := discover(ctx, *t)
 	if err != nil {
 		return err
@@ -140,6 +151,9 @@ func cmdBatch(ctx context.Context, args []string) error {
 	}
 	markUsedAddresses(ctx, as)
 	printPlan(as)
+	if s.InitPassword && !s.Setup.Empty() {
+		fmt.Printf("Devices in factory state additionally: %s\n", s.Setup)
+	}
 
 	bad := 0
 	for _, a := range as {
@@ -148,31 +162,31 @@ func cmdBatch(ctx context.Context, args []string) error {
 		}
 	}
 	if bad > 0 {
-		return fmt.Errorf("%d Gerät(e) mit Problemen – bitte Plan korrigieren", bad)
+		return fmt.Errorf("%d device(s) with problems – please correct the plan", bad)
 	}
 	if *dry {
 		return nil
 	}
-	if !*yes && !confirm(fmt.Sprintf("%d Gerät(e) jetzt konfigurieren? [j/N] ", len(as))) {
-		return errors.New("abgebrochen")
+	if !*yes && !confirm(fmt.Sprintf("Configure %d device(s) now? [y/N] ", len(as))) {
+		return errors.New("cancelled")
 	}
 
 	if s.Password = os.Getenv("AXIS_PASSWORD"); s.Password == "" {
-		if s.Password, err = readPassword(fmt.Sprintf("Passwort für %s: ", s.User)); err != nil {
+		if s.Password, err = readPassword(fmt.Sprintf("Password for %s: ", s.User)); err != nil {
 			return err
 		}
 		if s.InitPassword {
-			p2, err := readPassword("Wiederholen: ")
+			p2, err := readPassword("Repeat: ")
 			if err != nil {
 				return err
 			}
 			if p2 != s.Password {
-				return errors.New("Passwörter stimmen nicht überein")
+				return errors.New("passwords don't match")
 			}
 		}
 	}
 	if s.InitPassword && len(s.Password) < 8 {
-		return errors.New("Passwort zu kurz (mindestens 8 Zeichen)")
+		return errors.New("password too short (at least 8 characters)")
 	}
 
 	res := axis.RunBatch(ctx, as, s, func(e axis.BatchEvent) {
@@ -181,9 +195,9 @@ func cmdBatch(ctx context.Context, args []string) error {
 		case !e.Done:
 			fmt.Printf("%s: %s …\n", label, e.Step)
 		case e.Err != nil:
-			fmt.Printf("%s: FEHLER – %v\n", label, e.Err)
+			fmt.Printf("%s: ERROR – %v\n", label, e.Err)
 		default:
-			fmt.Printf("%s: fertig\n", label)
+			fmt.Printf("%s: done\n", label)
 		}
 	})
 	failed := 0
@@ -204,11 +218,11 @@ func cmdBatch(ctx context.Context, args []string) error {
 		if werr != nil {
 			return werr
 		}
-		fmt.Println("Protokoll:", *logPath)
+		fmt.Println("Log:", *logPath)
 	}
-	fmt.Printf("%d von %d Gerät(en) erfolgreich konfiguriert.\n", len(res)-failed, len(res))
+	fmt.Printf("%d of %d device(s) configured successfully.\n", len(res)-failed, len(res))
 	if failed > 0 {
-		return fmt.Errorf("%d Gerät(e) fehlgeschlagen", failed)
+		return fmt.Errorf("%d device(s) failed", failed)
 	}
 	return nil
 }
@@ -222,7 +236,7 @@ func planHasIP(plan []axis.PlanRow) bool {
 	return false
 }
 
-// pickDevices wählt die Geräte anhand der Argumente (Seriennummer oder IP) bzw. des Plans.
+// pickDevices selects the devices by the arguments (serial number or IP) or the plan.
 func pickDevices(all []*axis.Device, args []string, plan []axis.PlanRow) ([]axis.Device, error) {
 	if len(args) == 0 {
 		for _, r := range plan {
@@ -230,7 +244,7 @@ func pickDevices(all []*axis.Device, args []string, plan []axis.PlanRow) ([]axis
 		}
 	}
 	if len(args) == 0 {
-		return nil, errors.New("keine Geräte angegeben (Seriennummern/IPs oder -csv)")
+		return nil, errors.New("no devices given (serial numbers/IPs or -csv)")
 	}
 	var out []axis.Device
 	var missing []string
@@ -253,12 +267,12 @@ func pickDevices(all []*axis.Device, args []string, plan []axis.PlanRow) ([]axis
 		}
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("nicht gefunden: %s (Suchdauer mit -t verlängern?)", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("not found: %s (extend the discovery duration with -t?)", strings.Join(missing, ", "))
 	}
 	return out, nil
 }
 
-// markUsedAddresses prüft neue IPs, ob dort schon ein Gerät antwortet.
+// markUsedAddresses checks new IPs for whether a device already answers there.
 func markUsedAddresses(ctx context.Context, as []axis.Assignment) {
 	var wg sync.WaitGroup
 	for i := range as {
@@ -270,7 +284,7 @@ func markUsedAddresses(ctx context.Context, as []axis.Assignment) {
 		go func() {
 			defer wg.Done()
 			if axis.AddressInUse(ctx, a.IP) {
-				a.Problems = append(a.Problems, "Adresse antwortet bereits (belegt?)")
+				a.Problems = append(a.Problems, "address already answers (in use?)")
 			}
 		}()
 	}
@@ -279,7 +293,7 @@ func markUsedAddresses(ctx context.Context, as []axis.Assignment) {
 
 func printPlan(as []axis.Assignment) {
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "#\tSERIENNUMMER\tMODELL\tIP ALT\tIP NEU\tHOSTNAME\tHINWEIS")
+	fmt.Fprintln(tw, "#\tSERIAL\tMODEL\tOLD IP\tNEW IP\tHOSTNAME\tNOTE")
 	dash := func(s string) string {
 		if s == "" {
 			return "–"
@@ -301,7 +315,7 @@ func confirm(prompt string) bool {
 	fmt.Print(prompt)
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "j", "ja", "y", "yes":
+	case "y", "yes":
 		return true
 	}
 	return false

@@ -9,7 +9,7 @@
   </defs>
   <rect x="8" y="12" width="112" height="104" rx="22" fill="#1a5fb4"/>
   <rect x="8" y="8" width="112" height="104" rx="22" fill="url(#bg)"/>
-  <!-- Signalbögen -->
+  <!-- signal arcs -->
   <g fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" opacity=".9">
     <path d="M44 40a28 28 0 0 1 40 0"/>
     <path d="M32 28a44 44 0 0 1 64 0" opacity=".6"/>

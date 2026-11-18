@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package axis
 
@@ -21,24 +21,34 @@ import (
 	"time"
 )
 
-// ErrAuth: Zugangsdaten fehlen, sind falsch oder haben keine Admin-Rechte.
-var ErrAuth = errors.New("Benutzername oder Passwort falsch")
+// ErrAuth: credentials missing, wrong or without admin rights.
+var ErrAuth = errors.New("wrong user name or password")
 
-// ErrHasUser: Erstpasswort unmöglich, das Gerät hat schon einen Benutzer.
-var ErrHasUser = errors.New("Gerät hat bereits einen Benutzer – Passwort nur mit Anmeldung (Weboberfläche) änderbar")
+// ErrHasUser: initial password impossible, the device already has a user.
+var ErrHasUser = errors.New("device already has a user – the password can only be changed when logged in (web interface)")
 
-// ErrNoUser: Anmeldung unmöglich, weil das Gerät noch im Werkszustand ist (ist auch ErrAuth).
-var ErrNoUser = fmt.Errorf("%w: Gerät hat noch keinen Benutzer – zuerst ein Passwort setzen", ErrAuth)
+// ErrSetupUnknown: the factory state could not be determined.
+var ErrSetupUnknown = errors.New("factory state cannot be determined")
 
-// ErrNotSupported: Das Gerät kennt die (neue) API nicht.
-var ErrNotSupported = errors.New("von der Firmware nicht unterstützt")
+// ErrNoUser: login impossible because the device is still in factory state (is also ErrAuth).
+var ErrNoUser error = noUserError{}
 
-// ErrNoHTTPS: „Nur HTTPS“ ist eingeschaltet, das Gerät spricht aber kein HTTPS.
-var ErrNoHTTPS = errors.New("Gerät ist nicht per HTTPS erreichbar (Einstellung „Nur HTTPS“)")
+type noUserError struct{}
 
-// ---------------------------------------------------------------- HTTPS-Erkennung
+func (noUserError) Error() string {
+	return "device has no user yet – set a password first"
+}
+func (noUserError) Is(target error) bool { return target == ErrAuth }
 
-// httpsPort ist der Port, auf dem HTTPS erwartet wird (in Tests überschreibbar).
+// ErrNotSupported: the device doesn't know the (new) API.
+var ErrNotSupported = errors.New("not supported by the firmware")
+
+// ErrNoHTTPS: "HTTPS only" is enabled, but the device doesn't speak HTTPS.
+var ErrNoHTTPS = errors.New("device is not reachable via HTTPS (setting \"HTTPS only\")")
+
+// ---------------------------------------------------------------- HTTPS detection
+
+// httpsPort is the port HTTPS is expected on (overridable in tests).
 var httpsPort = 443
 
 var (
@@ -52,23 +62,23 @@ type schemeEntry struct {
 	at    time.Time
 }
 
-const schemeTTL = 2 * time.Minute
+const schemeTTL = CheckInterval // like the background check
 
-// SetHTTPSOnly: true = nie auf unverschlüsseltes HTTP zurückfallen.
+// SetHTTPSOnly: true = never fall back to unencrypted HTTP.
 func SetHTTPSOnly(on bool) {
 	httpsOnly.Store(on)
 }
 
-// HTTPSOnly liefert die aktuelle Einstellung.
+// HTTPSOnly returns the current setting.
 func HTTPSOnly() bool { return httpsOnly.Load() }
 
-// Selbst ausgestellte Zertifikate der Kameras werden akzeptiert (keine Prüfung):
-// Die Verbindung ist verschlüsselt, aber nicht gegen einen aktiven Angreifer geschützt.
+// Self-signed camera certificates are accepted (not verified): the connection is
+// encrypted but not protected against an active attacker.
 func tlsConfig() *tls.Config {
 	return &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}
 }
 
-// ProbeHTTPS prüft per TLS-Handshake, ob host HTTPS spricht. Das Ergebnis wird kurz gecacht.
+// ProbeHTTPS checks via TLS handshake whether host speaks HTTPS. The result is cached briefly.
 func ProbeHTTPS(ctx context.Context, host string) bool {
 	schemeMu.Lock()
 	e, ok := schemeCache[host]
@@ -81,7 +91,7 @@ func ProbeHTTPS(ctx context.Context, host string) bool {
 	if err == nil {
 		conn.Close()
 	} else if ctx.Err() != nil {
-		return false // abgebrochen – nichts merken
+		return false // cancelled – don't remember anything
 	}
 	schemeMu.Lock()
 	schemeCache[host] = schemeEntry{https: err == nil, at: time.Now()}
@@ -91,22 +101,22 @@ func ProbeHTTPS(ctx context.Context, host string) bool {
 
 // ---------------------------------------------------------------- Client
 
-// Client spricht VAPIX mit einem einzelnen Gerät – per HTTPS, wenn das Gerät es
-// anbietet, sonst (außer bei „Nur HTTPS“) per HTTP.
+// Client speaks VAPIX with a single device – via HTTPS if the device offers it,
+// otherwise (except with "HTTPS only") via HTTP.
 type Client struct {
 	host       string
-	port       int // HTTP-Port
+	port       int // HTTP port
 	user, pass string
 	hc         *http.Client
 
 	mu     sync.Mutex
-	base   string // ermittelt beim ersten Aufruf
+	base   string // determined on the first call
 	secure bool
 	chal   *challenge
 }
 
-// NewClient erzeugt einen Client. port ist der HTTP-Port (0 = 80).
-// user darf leer sein (nur offene Endpunkte).
+// NewClient creates a client. port is the HTTP port (0 = 80).
+// user may be empty (open endpoints only).
 func NewClient(host string, port int, user, pass string) *Client {
 	if port == 0 {
 		port = 80
@@ -117,14 +127,14 @@ func NewClient(host string, port int, user, pass string) *Client {
 		hc: &http.Client{
 			Timeout: 8 * time.Second,
 			Transport: &http.Transport{
-				Proxy:           nil, // Kameras sind lokal, nie über einen Proxy
+				Proxy:           nil, // cameras are local, never via a proxy
 				TLSClientConfig: tlsConfig(),
 			},
 		},
 	}
 }
 
-// baseURL wählt beim ersten Aufruf das Protokoll.
+// baseURL chooses the protocol on the first call.
 func (c *Client) baseURL(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	base := c.base
@@ -147,7 +157,7 @@ func (c *Client) baseURL(ctx context.Context) (string, error) {
 	return base, nil
 }
 
-// Secure meldet, ob der Client verschlüsselt (HTTPS) mit dem Gerät spricht.
+// Secure reports whether the client talks to the device encrypted (HTTPS).
 func (c *Client) Secure(ctx context.Context) bool {
 	_, err := c.baseURL(ctx)
 	c.mu.Lock()
@@ -219,12 +229,12 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, ctype
 	case http.StatusUnauthorized:
 		return resp.StatusCode, data, ErrAuth
 	case http.StatusForbidden:
-		return resp.StatusCode, data, fmt.Errorf("%w (keine Admin-Rechte)", ErrAuth)
+		return resp.StatusCode, data, fmt.Errorf("%w (no admin rights)", ErrAuth)
 	case http.StatusNotFound:
 		return resp.StatusCode, data, ErrNotSupported
 	}
 	if resp.StatusCode >= 400 {
-		return resp.StatusCode, data, fmt.Errorf("HTTP %d von %s", resp.StatusCode, path)
+		return resp.StatusCode, data, fmt.Errorf("HTTP %d from %s", resp.StatusCode, path)
 	}
 	return resp.StatusCode, data, nil
 }
@@ -235,7 +245,9 @@ type apiError struct {
 }
 
 func (c *Client) jsonCall(ctx context.Context, cgi, method string, params any, auth bool, out any) error {
-	req := map[string]any{"apiVersion": "1.0", "method": method}
+	// "context" is optional according to VAPIX, but some firmware (e.g. P3225-VE Mk II)
+	// rejects systemready.cgi without it with "Invalid POST data".
+	req := map[string]any{"apiVersion": "1.0", "context": "axis-ip-tool", "method": method}
 	if params != nil {
 		req["params"] = params
 	}
@@ -249,7 +261,7 @@ func (c *Client) jsonCall(ctx context.Context, cgi, method string, params any, a
 		Error *apiError       `json:"error"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return fmt.Errorf("%s: ungültige Antwort: %w", method, err)
+		return fmt.Errorf("%s: invalid response: %w", method, err)
 	}
 	if resp.Error != nil {
 		return fmt.Errorf("%s: %s (Code %d)", method, resp.Error.Message, resp.Error.Code)
@@ -262,9 +274,9 @@ func (c *Client) jsonCall(ctx context.Context, cgi, method string, params any, a
 
 // ---------------------------------------------------------------- Info
 
-// BasicInfo liest Modell, Seriennummer und Firmware. Ohne Zugangsdaten werden nur
-// die frei lesbaren Eigenschaften abgefragt; neuere Firmware sperrt diese, sobald ein
-// Benutzer angelegt ist – dann wird mit Anmeldung gelesen (ggf. über param.cgi).
+// BasicInfo reads model, serial number and firmware. Without credentials only the
+// unrestricted properties are queried; newer firmware locks them once a user has been
+// created – then they are read with login (via param.cgi if necessary).
 func (c *Client) BasicInfo(ctx context.Context) (Device, error) {
 	var out struct {
 		PropertyList map[string]string `json:"propertyList"`
@@ -300,7 +312,7 @@ func (c *Client) basicInfoLegacy(ctx context.Context) (Device, error) {
 		Serial: NormMAC(p["Properties.System.SerialNumber"]), Online: true}, nil
 }
 
-// params liest param.cgi-Gruppen und liefert Schlüssel ohne „root.“-Präfix.
+// params reads param.cgi groups and returns keys without the "root." prefix.
 func (c *Client) params(ctx context.Context, groups string) (map[string]string, error) {
 	_, data, err := c.do(ctx, http.MethodGet, "/axis-cgi/param.cgi?action=list&group="+url.QueryEscape(groups), nil, "", true)
 	if err != nil {
@@ -315,11 +327,10 @@ func (c *Client) params(ctx context.Context, groups string) (map[string]string, 
 	return p, nil
 }
 
-// NeedsInitialUser: Gerät im Werkszustand (noch kein Benutzer angelegt)?
-// Heuristik wie in der AXIS IP Utility: pwdgrp.cgi antwortet dann ohne Anmeldung.
+// NeedsInitialUser: is the device in factory state (no user created yet)?
 func (c *Client) NeedsInitialUser(ctx context.Context) (bool, error) {
-	// systemready.cgi meldet den Werkszustand ausdrücklich („needsetup“) und braucht keine
-	// Anmeldung. Wichtig: AXIS OS 11 beantwortet pwdgrp.cgi auch im Werkszustand mit 401.
+	// systemready.cgi reports the factory state explicitly ("needsetup") and needs no
+	// login. Important: AXIS OS 11 answers pwdgrp.cgi with 401 even in factory state.
 	var ready struct {
 		NeedSetup string `json:"needsetup"`
 	}
@@ -330,10 +341,11 @@ func (c *Client) NeedsInitialUser(ctx context.Context) (bool, error) {
 	if ctx.Err() != nil {
 		return false, ctx.Err()
 	}
-	// Ältere Firmware: Heuristik wie in der AXIS IP Utility
+	// Older firmware: heuristic as in the AXIS IP Utility. Only an anonymous answer is
+	// conclusive – newer firmware returns 401 in factory state too, so "unknown".
 	code, _, err := c.do(ctx, http.MethodGet, "/axis-cgi/pwdgrp.cgi?action=get", nil, "", false)
 	if errors.Is(err, ErrAuth) {
-		return false, nil
+		return false, ErrSetupUnknown
 	}
 	if err != nil {
 		return false, err
@@ -341,9 +353,9 @@ func (c *Client) NeedsInitialUser(ctx context.Context) (bool, error) {
 	return code == http.StatusOK, nil
 }
 
-// CheckLogin prüft die Zugangsdaten (Administrator). pwdgrp.cgi verlangt immer eine
-// Admin-Anmeldung – anders als param.cgi/basicdeviceinfo.cgi, die bei anonymem Zugriff
-// auch mit falschem Passwort antworten können.
+// CheckLogin verifies the credentials (administrator). pwdgrp.cgi always requires an
+// admin login – unlike param.cgi/basicdeviceinfo.cgi, which may answer anonymous access
+// even with a wrong password.
 func (c *Client) CheckLogin(ctx context.Context) error {
 	if c.user == "" {
 		return ErrAuth
@@ -356,11 +368,11 @@ func (c *Client) CheckLogin(ctx context.Context) error {
 	asked := c.chal != nil
 	c.mu.Unlock()
 	if err == nil && !asked && code == http.StatusOK {
-		// Ohne Anmeldung beantwortet → Werkszustand, Zugangsdaten nicht prüfbar
+		// answered without login → factory state, credentials cannot be verified
 		return ErrNoUser
 	}
 	if errors.Is(err, ErrAuth) {
-		// Abgelehnt – liegt es am Passwort oder am Werkszustand?
+		// rejected – because of the password or the factory state?
 		if needs, e := NewClient(c.host, c.port, "", "").NeedsInitialUser(ctx); e == nil && needs {
 			return ErrNoUser
 		}
@@ -368,9 +380,9 @@ func (c *Client) CheckLogin(ctx context.Context) error {
 	return err
 }
 
-// ---------------------------------------------------------------- Benutzer
+// ---------------------------------------------------------------- Users
 
-// CreateInitialUser legt den ersten Administrator an (Werkszustand).
+// CreateInitialUser creates the first administrator (factory state).
 func (c *Client) CreateInitialUser(ctx context.Context, user, pass string) error {
 	grp := "users"
 	if user == "root" {
@@ -389,7 +401,7 @@ func (c *Client) CreateInitialUser(ctx context.Context, user, pass string) error
 	if !strings.Contains(strings.ToLower(string(data)), "error") {
 		return nil
 	}
-	// Ältere Firmware: root existiert schon ohne Passwort -> update
+	// older firmware: root already exists without password -> update
 	form = url.Values{"action": {"update"}, "user": {user}, "pwd": {pass}}
 	_, data, err = c.do(ctx, http.MethodPost, "/axis-cgi/pwdgrp.cgi", []byte(form.Encode()),
 		"application/x-www-form-urlencoded", false)
@@ -402,9 +414,9 @@ func (c *Client) CreateInitialUser(ctx context.Context, user, pass string) error
 	return nil
 }
 
-// ---------------------------------------------------------------- Netzwerk
+// ---------------------------------------------------------------- Network
 
-// NetworkConfig ist die vereinfachte IPv4-/Hostname-/DNS-Konfiguration.
+// NetworkConfig is the simplified IPv4/hostname/DNS configuration.
 type NetworkConfig struct {
 	DHCP             bool
 	Address          string
@@ -415,41 +427,41 @@ type NetworkConfig struct {
 	DNSFromDHCP      bool
 	DNS              []string
 	DeviceName       string
-	Legacy           bool // Gerät kennt nur param.cgi
+	Legacy           bool // device only knows param.cgi
 }
 
-// Validate prüft die Eingaben und normalisiert sie.
+// Validate checks the input and normalizes it.
 func (n *NetworkConfig) Validate() error {
 	if !n.DHCP {
 		a, err := netip.ParseAddr(n.Address)
 		if err != nil || !a.Is4() {
-			return fmt.Errorf("ungültige IP-Adresse %q", n.Address)
+			return fmt.Errorf("invalid IP address %q", n.Address)
 		}
 		if n.Prefix < 1 || n.Prefix > 32 {
-			return fmt.Errorf("ungültiges Präfix /%d", n.Prefix)
+			return fmt.Errorf("invalid prefix /%d", n.Prefix)
 		}
 		if n.Gateway != "" {
 			g, err := netip.ParseAddr(n.Gateway)
 			if err != nil || !g.Is4() {
-				return fmt.Errorf("ungültiges Gateway %q", n.Gateway)
+				return fmt.Errorf("invalid gateway %q", n.Gateway)
 			}
 			if !netip.PrefixFrom(a, n.Prefix).Masked().Contains(g) {
-				return errors.New("Gateway liegt nicht im Subnetz")
+				return errors.New("gateway is not in the subnet")
 			}
 		}
 	}
 	if !n.HostnameFromDHCP && n.Hostname == "" {
-		return errors.New("Hostname fehlt")
+		return errors.New("hostname missing")
 	}
 	for _, d := range n.DNS {
 		if a, err := netip.ParseAddr(d); err != nil || !a.Is4() {
-			return fmt.Errorf("ungültiger DNS-Server %q", d)
+			return fmt.Errorf("invalid DNS server %q", d)
 		}
 	}
 	return nil
 }
 
-// ParsePrefix akzeptiert „24“, „/24“ oder „255.255.255.0“.
+// ParsePrefix accepts "24", "/24" or "255.255.255.0".
 func ParsePrefix(s string) (int, error) {
 	s = strings.TrimPrefix(strings.TrimSpace(s), "/")
 	if n, err := strconv.Atoi(s); err == nil && n >= 0 && n <= 32 {
@@ -457,24 +469,24 @@ func ParsePrefix(s string) (int, error) {
 	}
 	a, err := netip.ParseAddr(s)
 	if err != nil || !a.Is4() {
-		return 0, fmt.Errorf("ungültige Subnetzmaske %q", s)
+		return 0, fmt.Errorf("invalid subnet mask %q", s)
 	}
 	b := a.As4()
 	m := net.IPv4Mask(b[0], b[1], b[2], b[3])
 	ones, bits := m.Size()
 	if bits == 0 {
-		return 0, fmt.Errorf("ungültige Subnetzmaske %q", s)
+		return 0, fmt.Errorf("invalid subnet mask %q", s)
 	}
 	return ones, nil
 }
 
-// PrefixToMask wandelt 24 in "255.255.255.0".
+// PrefixToMask converts 24 to "255.255.255.0".
 func PrefixToMask(p int) string {
 	m := net.CIDRMask(p, 32)
 	return net.IP(m).String()
 }
 
-// GetNetwork liest die aktuelle Netzwerkkonfiguration.
+// GetNetwork reads the current network configuration.
 func (c *Client) GetNetwork(ctx context.Context) (NetworkConfig, error) {
 	var d struct {
 		System struct {
@@ -552,8 +564,8 @@ func (c *Client) GetNetwork(ctx context.Context) (NetworkConfig, error) {
 	return cfg, nil
 }
 
-// SetNetwork schreibt die Konfiguration. Die IP wird zuletzt gesetzt, weil das
-// Gerät danach unter der alten Adresse evtl. nicht mehr antwortet.
+// SetNetwork writes the configuration. The IP is set last because the device may no
+// longer answer at the old address afterwards.
 func (c *Client) SetNetwork(ctx context.Context, cfg NetworkConfig) error {
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -580,9 +592,8 @@ func (c *Client) SetNetwork(ctx context.Context, cfg NetworkConfig) error {
 	return ignoreDisconnect(c.jsonCall(ctx, "network_settings.cgi", "setIPv4AddressConfiguration", p, true, nil))
 }
 
-// setHostname setzt den Hostnamen und prüft, ob das Gerät ihn übernommen hat. Einige
-// AXIS-OS-9-Versionen kennen setHostnameConfiguration nicht oder übernehmen es nicht –
-// dann wird es über param.cgi versucht.
+// setHostname sets the hostname and checks whether the device applied it. Some AXIS OS 9
+// versions don't know setHostnameConfiguration or don't apply it – then param.cgi is tried.
 func (c *Client) setHostname(ctx context.Context, cfg NetworkConfig) error {
 	err := c.jsonCall(ctx, "network_settings.cgi", "setHostnameConfiguration", map[string]any{
 		"useDhcpHostname": cfg.HostnameFromDHCP, "staticHostname": cfg.Hostname}, true, nil)
@@ -594,17 +605,17 @@ func (c *Client) setHostname(ctx context.Context, cfg NetworkConfig) error {
 	}
 	if perr := c.setHostnameParam(ctx, cfg); perr != nil {
 		if err != nil {
-			return fmt.Errorf("Hostname: %w", err)
+			return fmt.Errorf("hostname: %w", err)
 		}
-		return fmt.Errorf("Hostname: %w", perr)
+		return fmt.Errorf("hostname: %w", perr)
 	}
 	if !c.hostnameApplied(ctx, cfg) {
-		return fmt.Errorf("Gerät hat den Hostnamen %q nicht übernommen", cfg.Hostname)
+		return fmt.Errorf("device did not apply the hostname %q", cfg.Hostname)
 	}
 	return nil
 }
 
-// hostnameApplied liest den Hostnamen zurück (nicht lesbar = als übernommen werten).
+// hostnameApplied reads the hostname back (unreadable = treat as applied).
 func (c *Client) hostnameApplied(ctx context.Context, cfg NetworkConfig) bool {
 	if cfg.HostnameFromDHCP {
 		return true
@@ -664,12 +675,12 @@ func (c *Client) getNetworkLegacy(ctx context.Context) (NetworkConfig, error) {
 }
 
 func (c *Client) setNetworkLegacy(ctx context.Context, cfg NetworkConfig) error {
-	// Hostname zuerst und einzeln, damit er geprüft werden kann, bevor sich die IP ändert
+	// hostname first and separately so it can be verified before the IP changes
 	if err := c.setHostnameParam(ctx, cfg); err != nil {
-		return fmt.Errorf("Hostname: %w", err)
+		return fmt.Errorf("hostname: %w", err)
 	}
 	if !c.hostnameApplied(ctx, cfg) {
-		return fmt.Errorf("Gerät hat den Hostnamen %q nicht übernommen", cfg.Hostname)
+		return fmt.Errorf("device did not apply the hostname %q", cfg.Hostname)
 	}
 	q := url.Values{
 		"action":                          {"update"},
@@ -698,9 +709,9 @@ func (c *Client) setNetworkLegacy(ctx context.Context, cfg NetworkConfig) error 
 	return nil
 }
 
-// ---------------------------------------------------------------- Zeit
+// ---------------------------------------------------------------- Time
 
-// SetTime setzt Zeitzone (IANA, z. B. "Europe/Vienna") und/oder die aktuelle Uhrzeit.
+// SetTime sets the time zone (IANA, e.g. "Europe/Vienna") and/or the current time.
 func (c *Client) SetTime(ctx context.Context, tz string, syncNow bool) error {
 	if tz != "" {
 		if err := c.jsonCall(ctx, "time.cgi", "setTimeZone", map[string]string{"timeZone": tz}, true, nil); err != nil {
@@ -713,7 +724,7 @@ func (c *Client) SetTime(ctx context.Context, tz string, syncNow bool) error {
 	now := time.Now().UTC()
 	err := c.jsonCall(ctx, "time.cgi", "setDateTime",
 		map[string]string{"dateTime": now.Format("2006-01-02T15:04:05Z")}, true, nil)
-	if errors.Is(err, ErrNotSupported) { // ältere Firmware
+	if errors.Is(err, ErrNotSupported) { // older firmware
 		q := fmt.Sprintf("/axis-cgi/date.cgi?action=set&year=%d&month=%d&day=%d&hour=%d&minute=%d&second=%d",
 			now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second())
 		_, _, err = c.do(ctx, http.MethodGet, q, nil, "", true)
@@ -723,17 +734,17 @@ func (c *Client) SetTime(ctx context.Context, tz string, syncNow bool) error {
 
 // ---------------------------------------------------------------- NTP
 
-// NTPConfig beschreibt die NTP-Client-Einstellungen.
+// NTPConfig describes the NTP client settings.
 type NTPConfig struct {
 	Enabled  bool
-	FromDHCP bool     // Server per DHCP beziehen
-	Servers  []string // statische Server
-	Active   []string // aktuell verwendete Server (nur lesen)
-	Synced   *bool    // nil = unbekannt
-	Legacy   bool     // Gerät kennt nur param.cgi
+	FromDHCP bool     // obtain servers via DHCP
+	Servers  []string // static servers
+	Active   []string // servers currently in use (read only)
+	Synced   *bool    // nil = unknown
+	Legacy   bool     // device only knows param.cgi
 }
 
-// GetNTP liest die NTP-Konfiguration.
+// GetNTP reads the NTP configuration.
 func (c *Client) GetNTP(ctx context.Context) (NTPConfig, error) {
 	type client struct {
 		Enabled       *bool    `json:"enabled"`
@@ -770,15 +781,15 @@ func (c *Client) GetNTP(ctx context.Context) (NTPConfig, error) {
 	return cfg, nil
 }
 
-// SetNTP schreibt die NTP-Konfiguration.
+// SetNTP writes the NTP configuration.
 func (c *Client) SetNTP(ctx context.Context, cfg NTPConfig) error {
 	for _, s := range cfg.Servers {
 		if strings.ContainsAny(s, " ,;/") || s == "" {
-			return fmt.Errorf("ungültiger NTP-Server %q", s)
+			return fmt.Errorf("invalid NTP server %q", s)
 		}
 	}
 	if cfg.Enabled && !cfg.FromDHCP && len(cfg.Servers) == 0 {
-		return errors.New("mindestens einen NTP-Server angeben oder „per DHCP“ wählen")
+		return errors.New("specify at least one NTP server or choose \"via DHCP\"")
 	}
 	if cfg.Legacy {
 		return c.setNTPLegacy(ctx, cfg)
@@ -819,7 +830,7 @@ func (c *Client) setNTPLegacy(ctx context.Context, cfg NTPConfig) error {
 		"Time.ObtainFromDHCP": {map[bool]string{true: "yes", false: "no"}[cfg.FromDHCP]},
 	}
 	if len(cfg.Servers) > 0 {
-		q.Set("Time.NTP.Server", cfg.Servers[0]) // alte Firmware kennt nur einen Server
+		q.Set("Time.NTP.Server", cfg.Servers[0]) // old firmware only knows one server
 	}
 	_, data, err := c.do(ctx, http.MethodGet, "/axis-cgi/param.cgi?"+q.Encode(), nil, "", true)
 	if err != nil {
@@ -831,10 +842,10 @@ func (c *Client) setNTPLegacy(ctx context.Context, cfg NTPConfig) error {
 	return nil
 }
 
-// ---------------------------------------------------------------- Vorschau
+// ---------------------------------------------------------------- Preview
 
-// Snapshot holt ein JPEG-Standbild. width > 0 fordert eine passende Auflösung an;
-// lehnt das Gerät sie ab, wird die Standardauflösung verwendet.
+// Snapshot fetches a JPEG still image. width > 0 requests a matching resolution;
+// if the device rejects it, the default resolution is used.
 func (c *Client) Snapshot(ctx context.Context, width int) ([]byte, error) {
 	path := "/axis-cgi/jpg/image.cgi"
 	if width > 0 {
@@ -849,25 +860,25 @@ func (c *Client) Snapshot(ctx context.Context, width int) ([]byte, error) {
 		return nil, err
 	}
 	if !isJPEG(data) {
-		return nil, errors.New("Gerät lieferte kein Bild (Kamera deaktiviert oder kein Videokanal?)")
+		return nil, errors.New("device returned no image (camera disabled or no video channel?)")
 	}
 	return data, nil
 }
 
 func isJPEG(b []byte) bool { return len(b) > 3 && b[0] == 0xFF && b[1] == 0xD8 }
 
-// ---------------------------------------------------------------- Sonstiges
+// ---------------------------------------------------------------- Misc
 
-// Restart startet das Gerät neu.
+// Restart reboots the device.
 func (c *Client) Restart(ctx context.Context) error {
 	_, _, err := c.do(ctx, http.MethodGet, "/axis-cgi/restart.cgi", nil, "", true)
 	return ignoreDisconnect(err)
 }
 
-// FactoryReset setzt das Gerät auf Werkseinstellungen zurück (Benutzer, Passwörter und alle
-// Einstellungen) und startet es neu. keepNetwork behält die IP-Einstellungen
-// (factorydefault.cgi); sonst wird alles zurückgesetzt (hardfactorydefault.cgi) – das Gerät
-// holt sich danach per DHCP eine Adresse bzw. nimmt 192.168.0.90.
+// FactoryReset resets the device to factory defaults (users, passwords and all settings)
+// and reboots it. keepNetwork keeps the IP settings (factorydefault.cgi); otherwise
+// everything is reset (hardfactorydefault.cgi) – the device then obtains an address via
+// DHCP or uses 192.168.0.90.
 func (c *Client) FactoryReset(ctx context.Context, keepNetwork bool) error {
 	path := "/axis-cgi/hardfactorydefault.cgi"
 	if keepNetwork {

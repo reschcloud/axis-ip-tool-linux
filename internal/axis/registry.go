@@ -1,28 +1,31 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package axis
 
-import "sort"
+import (
+	"sort"
+	"time"
+)
 
-// Registry führt die Teilergebnisse der Suche (mDNS, SSDP, Anreicherung) zu
-// Geräten zusammen. Nicht threadsicher – vom Aufrufer zu serialisieren.
+// Registry combines the partial discovery results (mDNS, SSDP, enrichment) into
+// devices. Not thread-safe – callers must serialize access.
 type Registry struct {
 	devs map[string]*Device
-	byEP map[string]string // IP:Port -> Schlüssel
+	byEP map[string]string // IP:port -> key
 }
 
-// Change beschreibt, was ein Update an der Geräteliste geändert hat.
+// Change describes what an update changed in the device list.
 type Change struct {
-	Key     string // Schlüssel des aktualisierten Geräts ("" = ignoriert)
-	Added   bool   // Key ist neu in der Liste
-	Removed string // dieser Schlüssel ist entfallen (in Key aufgegangen)
+	Key     string // key of the updated device ("" = ignored)
+	Added   bool   // Key is new in the list
+	Removed string // this key was dropped (merged into Key)
 }
 
 func NewRegistry() *Registry {
 	return &Registry{devs: map[string]*Device{}, byEP: map[string]string{}}
 }
 
-// Update übernimmt d und liefert die Änderung.
+// Update applies d and returns the change.
 func (r *Registry) Update(d Device) Change {
 	key, ep := d.Key(), d.Endpoint()
 	if key == "" {
@@ -33,9 +36,9 @@ func (r *Registry) Update(d Device) Change {
 		od := r.devs[old]
 		switch {
 		case d.Serial == "":
-			key = old // Nachricht ohne Seriennummer gehört zum bekannten Gerät dieser Adresse
+			key = old // message without serial belongs to the known device at this address
 		case od != nil && od.Serial == "":
-			// Gerät war nur per Adresse bekannt (z. B. SSDP) – jetzt kennen wir die Seriennummer
+			// device was known only by address (e.g. SSDP) – now we know the serial number
 			delete(r.devs, old)
 			ch.Removed = old
 			if r.devs[key] == nil {
@@ -61,13 +64,13 @@ func (r *Registry) Update(d Device) Change {
 	return ch
 }
 
-// Get liefert das Gerät zu key oder nil.
+// Get returns the device for key or nil.
 func (r *Registry) Get(key string) *Device { return r.devs[key] }
 
-// Len liefert die Anzahl der Geräte.
+// Len returns the number of devices.
 func (r *Registry) Len() int { return len(r.devs) }
 
-// All liefert alle Geräte, sortiert nach IP-Adresse.
+// All returns all devices, sorted by IP address.
 func (r *Registry) All() []*Device {
 	out := make([]*Device, 0, len(r.devs))
 	for _, d := range r.devs {
@@ -75,4 +78,20 @@ func (r *Registry) All() []*Device {
 	}
 	sort.Slice(out, func(i, j int) bool { return IPLess(out[i].IP, out[j].IP) })
 	return out
+}
+
+// Expire marks devices without a sign of life for maxAge as offline and returns their keys.
+func (r *Registry) Expire(now time.Time, maxAge time.Duration) []string {
+	var keys []string
+	for k, d := range r.devs {
+		limit := maxAge
+		if !d.Pingable {
+			limit = max(maxAge, maxAgeNoPing)
+		}
+		if d.Online && !d.LastSeen.IsZero() && now.Sub(d.LastSeen) > limit {
+			d.Online = false
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }

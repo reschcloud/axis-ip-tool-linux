@@ -1,37 +1,55 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package axis enthält die geräteunabhängige Logik: Suche, VAPIX-Client und Datenmodell.
+// Package axis contains the GUI-independent logic: discovery, VAPIX client and data model.
 package axis
 
 import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
-// Device beschreibt ein gefundenes Axis-Gerät. Leere Felder bedeuten „unbekannt“.
+// Device describes a discovered Axis device. Empty fields mean "unknown".
 type Device struct {
-	Serial      string // Seriennummer = MAC ohne Trennzeichen, Großbuchstaben
+	Serial      string // serial number = MAC without separators, upper case
 	IP          string
 	Port        int
+	IPv6        []string // all known IPv6 addresses (without zone); display: PreferredIPv6
+	Iface       string   // network interface the device was discovered on
 	Name        string
-	Hostname    string // aus mDNS (ohne „.local“) oder – wenn HostnameSet – vom Gerät gelesen/gesetzt
-	HostnameSet bool   // Hostname stammt aus der Gerätekonfiguration (Vorrang vor mDNS)
+	Hostname    string // from mDNS (without ".local") or – if HostnameSet – read/set on the device
+	HostnameSet bool   // hostname comes from the device configuration (takes precedence over mDNS)
 	Model       string
 	Firmware    string
-	NeedsSetup  *bool // nil = unbekannt
-	Locked      *bool // Geräteinfos nur mit Anmeldung lesbar; nil = unbekannt
-	Unlocked    bool  // gültige Zugangsdaten bekannt (bis AuthFailed)
-	AuthFailed  bool  // zuletzt verwendete Zugangsdaten wurden abgelehnt (bis Unlocked)
-	Enriched    bool  // Abfrage von Zustand/Protokoll ist durch (auch wenn erfolglos)
-	HTTPS       *bool // Gerät spricht HTTPS; nil = unbekannt
+	NeedsSetup  *bool // nil = unknown
+	Locked      *bool // device info readable only when logged in; nil = unknown
+	Unlocked    bool  // valid credentials known (until AuthFailed)
+	AuthFailed  bool  // the credentials used last were rejected (until Unlocked)
+	Enriched    bool  // state/protocol query has finished (even if unsuccessful)
+	HTTPS       *bool // device speaks HTTPS; nil = unknown
 	Online      bool
-	Source      string // "mDNS", "SSDP", "VAPIX"
+	Gone        bool          // updates only: device has signed off (mDNS) → offline
+	LastSeen    time.Time     // last reply from the device (ping, HTTP, mDNS, SSDP)
+	Ping        time.Duration // round-trip time of the last ping, < 0 = no reply
+	PingAt      time.Time     // time of the last ping (zero = never)
+	Pingable    bool          // has replied to a ping at least once
+	IPv6Full    bool          // updates only: IPv6 is the complete current list
+	Source      string        // "mDNS", "SSDP", "VAPIX"
 }
 
-// Key identifiziert ein Gerät über Suchläufe hinweg.
+// MaxAge: without any sign of life a device is considered offline after this time
+// (Registry.Expire). Devices that don't answer pings only respond to the background check –
+// maxAgeNoPing applies to them, otherwise they would briefly be "offline" between two checks.
+const (
+	MaxAge       = 10 * time.Second
+	maxAgeNoPing = 2*CheckInterval + 5*time.Second
+)
+
+// Key identifies a device across discovery runs.
 func (d Device) Key() string {
 	if d.Serial != "" {
 		return d.Serial
@@ -39,7 +57,7 @@ func (d Device) Key() string {
 	return d.IP
 }
 
-// Endpoint identifiziert die Adresse eines Geräts (IP:Port), leer wenn unbekannt.
+// Endpoint identifies the address of a device (IP:port), empty if unknown.
 func (d Device) Endpoint() string {
 	if d.IP == "" {
 		return ""
@@ -51,7 +69,7 @@ func (d Device) Endpoint() string {
 	return net.JoinHostPort(d.IP, strconv.Itoa(p))
 }
 
-// Merge übernimmt alle bekannten Felder aus u.
+// Merge takes over all known fields from u.
 func (d *Device) Merge(u Device) {
 	set := func(dst *string, v string) {
 		if v != "" {
@@ -59,18 +77,30 @@ func (d *Device) Merge(u Device) {
 		}
 	}
 	set(&d.Serial, u.Serial)
-	// Eine Link-Local-Adresse verdrängt keine routbare: mDNS meldet oft beide.
+	// A link-local address doesn't replace a routable one: mDNS often reports both.
 	if u.IP != "" && !(IsLinkLocal(u.IP) && d.IP != "" && !IsLinkLocal(d.IP)) {
 		d.IP = u.IP
 		if u.Port != 0 {
 			d.Port = u.Port
 		}
 	}
-	// Zustandsangaben gelten nur für die Adresse, unter der sie ermittelt wurden.
+	// State information only applies to the address it was determined for.
 	sameAddr := u.IP == "" || u.IP == d.IP
 	set(&d.Name, u.Name)
-	// mDNS kündigt bei älterer Firmware „axis-<seriennummer>“ an, unabhängig vom
-	// konfigurierten Hostnamen – der aus der Konfiguration hat daher Vorrang.
+	set(&d.Iface, u.Iface)
+	if u.IPv6Full {
+		d.IPv6 = slices.Clone(u.IPv6)
+	}
+	for _, a := range u.IPv6 {
+		if !slices.Contains(d.IPv6, a) {
+			d.IPv6 = append(d.IPv6, a)
+		}
+	}
+	if u.LastSeen.After(d.LastSeen) {
+		d.LastSeen = u.LastSeen
+	}
+	// With older firmware mDNS announces "axis-<serial>" regardless of the configured
+	// hostname – the one from the configuration therefore takes precedence.
 	if u.Hostname != "" && (u.HostnameSet || !d.HostnameSet) {
 		d.Hostname = u.Hostname
 	}
@@ -79,7 +109,7 @@ func (d *Device) Merge(u Device) {
 	set(&d.Firmware, u.Firmware)
 	if u.NeedsSetup != nil && sameAddr {
 		d.NeedsSetup = u.NeedsSetup
-		if *u.NeedsSetup { // Werkszustand: keine Benutzer, also auch keine gültige Anmeldung
+		if *u.NeedsSetup { // factory state: no users, so no valid login either
 			d.Unlocked, d.AuthFailed = false, false
 		}
 	}
@@ -89,39 +119,75 @@ func (d *Device) Merge(u Device) {
 	if u.HTTPS != nil && sameAddr {
 		d.HTTPS = u.HTTPS
 	}
+	if !u.PingAt.IsZero() && u.PingAt.After(d.PingAt) && sameAddr {
+		d.Ping, d.PingAt = u.Ping, u.PingAt
+		d.Pingable = d.Pingable || u.Ping >= 0
+	}
 	d.Enriched = d.Enriched || u.Enriched
 	switch {
 	case u.Unlocked:
 		d.Unlocked, d.AuthFailed = true, false
-		no := false // gültige Anmeldung → es gibt einen Benutzer
+		no := false // valid login → a user exists
 		d.NeedsSetup = &no
 	case u.AuthFailed:
 		d.Unlocked, d.AuthFailed = false, true
 	}
-	d.Online = u.Online
-}
-
-// Status liefert einen kurzen, menschenlesbaren Zustand.
-func (d Device) Status() string {
+	// Online is only ever set, never cleared by missing information: devices go offline
+	// by signing off (Gone) or by missing signs of life (Registry.Expire).
 	switch {
-	case !d.Online:
-		return "Offline"
-	case HTTPSOnly() && d.HTTPS != nil && !*d.HTTPS:
-		return "Kein HTTPS"
-	case d.NeedsSetup != nil && *d.NeedsSetup:
-		return "Kein Passwort gesetzt"
-	case d.AuthFailed:
-		return "Passwort falsch"
-	case IsLinkLocal(d.IP):
-		return "Link-Local-Adresse"
-	case d.Unlocked:
-		return "Angemeldet"
-	default:
-		return "Nicht angemeldet"
+	case u.Gone:
+		d.Online = false
+	case u.Online:
+		d.Online = true
 	}
 }
 
-// Connection liefert „HTTPS“, „HTTP“ oder "" (unbekannt).
+// PingText: "0.4 ms", "no reply" or "" (not pinged yet).
+func (d Device) PingText() string {
+	switch {
+	case d.PingAt.IsZero():
+		return ""
+	case d.Ping < 0:
+		return "no reply"
+	case d.Ping < 10*time.Millisecond:
+		return fmt.Sprintf("%.1f ms", float64(d.Ping)/float64(time.Millisecond))
+	default:
+		return fmt.Sprintf("%d ms", d.Ping.Milliseconds())
+	}
+}
+
+// Status values (also compared against in the GUI).
+const (
+	StatusOffline     = "Offline"
+	StatusNoHTTPS     = "No HTTPS"
+	StatusNoPassword  = "No password set"
+	StatusAuthFailed  = "Wrong password"
+	StatusLinkLocal   = "Link-local address"
+	StatusLoggedIn    = "Logged in"
+	StatusNotLoggedIn = "Not logged in"
+)
+
+// Status returns a short, human-readable state.
+func (d Device) Status() string {
+	switch {
+	case !d.Online:
+		return StatusOffline
+	case HTTPSOnly() && d.HTTPS != nil && !*d.HTTPS:
+		return StatusNoHTTPS
+	case d.NeedsSetup != nil && *d.NeedsSetup:
+		return StatusNoPassword
+	case d.AuthFailed:
+		return StatusAuthFailed
+	case IsLinkLocal(d.IP):
+		return StatusLinkLocal
+	case d.Unlocked:
+		return StatusLoggedIn
+	default:
+		return StatusNotLoggedIn
+	}
+}
+
+// Connection returns "HTTPS", "HTTP" or "" (unknown).
 func (d Device) Connection() string {
 	switch {
 	case d.HTTPS == nil:
@@ -132,7 +198,7 @@ func (d Device) Connection() string {
 	return "HTTP"
 }
 
-// WebURL ist die Adresse der Weboberfläche.
+// WebURL is the address of the web interface.
 func (d Device) WebURL() string {
 	if d.HTTPS != nil && *d.HTTPS {
 		if httpsPort == 443 {
@@ -146,15 +212,41 @@ func (d Device) WebURL() string {
 	return "http://" + d.IP + "/"
 }
 
-// IsLocked: Gerät verlangt eine Anmeldung, die wir noch nicht kennen.
+// PreferredIPv6 is the IPv6 address to display (see PickIPv6).
+func (d Device) PreferredIPv6() string { return PickIPv6(d.IPv6, d.Serial) }
+
+// IPv6Endpoint: target for connections via IPv6, with zone for link-local ("fe80::…%eth0").
+func (d Device) IPv6Endpoint() string {
+	a := d.PreferredIPv6()
+	if a != "" && IsIPv6LinkLocal(a) && d.Iface != "" {
+		return a + "%" + d.Iface
+	}
+	return a
+}
+
+// WebTargetIPv6 returns scheme, host (with zone for link-local) and port of the web
+// interface via IPv6 – protocol as determined via IPv4. host == "" without a known IPv6 address.
+func (d Device) WebTargetIPv6() (scheme, host string, port int) {
+	host = d.IPv6Endpoint()
+	if d.HTTPS != nil && *d.HTTPS {
+		return "https", host, httpsPort
+	}
+	port = d.Port
+	if port == 0 {
+		port = 80
+	}
+	return "http", host, port
+}
+
+// IsLocked: the device requires a login we don't know yet.
 func (d Device) IsLocked() bool { return d.Locked != nil && *d.Locked && !d.Unlocked }
 
-// IsLinkLocal: Adresse aus 169.254.0.0/16.
+// IsLinkLocal: address from 169.254.0.0/16.
 func IsLinkLocal(ip string) bool { return strings.HasPrefix(ip, "169.254.") }
 
 var macRe = regexp.MustCompile(`(?i)([0-9a-f]{2}[:-]?){5}[0-9a-f]{2}`)
 
-// NormMAC sucht eine MAC-Adresse in s und gibt sie als 12 Hex-Großbuchstaben zurück.
+// NormMAC finds a MAC address in s and returns it as 12 upper-case hex characters.
 func NormMAC(s string) string {
 	m := macRe.FindString(s)
 	if m == "" {
@@ -164,7 +256,7 @@ func NormMAC(s string) string {
 	return strings.ToUpper(m)
 }
 
-// IsAxisOUI prüft, ob die MAC zu einem Axis-Herstellerpräfix gehört.
+// IsAxisOUI checks whether the MAC belongs to an Axis vendor prefix.
 func IsAxisOUI(mac string) bool {
 	if len(mac) < 6 {
 		return false
@@ -176,16 +268,16 @@ func IsAxisOUI(mac string) bool {
 	return false
 }
 
-// ParseMAC akzeptiert eine Seriennummer (ACCC8E123456) oder MAC (ac:cc:8e:12:34:56).
+// ParseMAC accepts a serial number (ACCC8E123456) or MAC (ac:cc:8e:12:34:56).
 func ParseMAC(s string) (net.HardwareAddr, error) {
 	n := NormMAC(s)
 	if len(n) != 12 {
-		return nil, fmt.Errorf("ungültige Seriennummer/MAC %q", strings.TrimSpace(s))
+		return nil, fmt.Errorf("invalid serial number/MAC %q", strings.TrimSpace(s))
 	}
 	return net.ParseMAC(n[0:2] + ":" + n[2:4] + ":" + n[4:6] + ":" + n[6:8] + ":" + n[8:10] + ":" + n[10:12])
 }
 
-// IPLess sortiert IPv4-Adressen numerisch.
+// IPLess sorts IPv4 addresses numerically.
 func IPLess(a, b string) bool {
 	pa, pb := net.ParseIP(a).To4(), net.ParseIP(b).To4()
 	if pa == nil || pb == nil {

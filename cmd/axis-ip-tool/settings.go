@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package main
 
@@ -8,9 +8,19 @@ import (
 	"path/filepath"
 )
 
-// settings sind die dauerhaft gespeicherten Einstellungen der App.
+// settings are the persistently stored settings of the app.
 type settings struct {
 	HTTPSOnly bool `json:"httpsOnly"`
+	// commissioning; nil = default (50 Hz, ceiling), 0 or "" = don't change
+	PowerFrequency *int    `json:"powerFrequency,omitempty"`
+	Mount          *string `json:"mount,omitempty"`
+}
+
+// updateSettings reads the settings, changes them with fn and saves them again.
+func updateSettings(fn func(*settings)) error {
+	s, _ := loadSettings() // missing/broken file → defaults
+	fn(&s)
+	return saveSettings(s)
 }
 
 func settingsPath() (string, error) {

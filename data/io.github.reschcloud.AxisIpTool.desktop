@@ -1,12 +1,12 @@
 [Desktop Entry]
 Name=Axis IP Tool
-GenericName=Netzwerkkameras einrichten
-Comment=Axis-Kameras im Netzwerk finden und konfigurieren
+GenericName=Network Camera Setup
+Comment=Find and configure Axis cameras on the network
 Exec=axis-ip-tool
 Icon=io.github.reschcloud.AxisIpTool
 Terminal=false
 Type=Application
 Categories=Network;GTK;
-Keywords=Axis;Kamera;Camera;IP;VAPIX;Netzwerk;Network;
+Keywords=Axis;Camera;IP;VAPIX;Network;
 StartupNotify=true
 DBusActivatable=false

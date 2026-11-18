@@ -1,7 +1,7 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
-// axis-ip-tool – GNOME-App zum Finden und Grundkonfigurieren von Axis-Geräten,
-// angelehnt an die AXIS IP Utility.
+// axis-ip-tool – GNOME app for finding Axis devices and doing their basic configuration,
+// modeled on the AXIS IP Utility.
 package main
 
 import (
@@ -16,14 +16,19 @@ import (
 
 const appID = "io.github.reschcloud.AxisIpTool"
 
-// version wird beim Bauen gesetzt (-ldflags "-X main.version=…", siehe Makefile).
+// version is set at build time (-ldflags "-X main.version=…", see Makefile).
 var version = "dev"
 
 func main() {
 	if s, err := loadSettings(); err == nil {
 		axis.SetHTTPSOnly(s.HTTPSOnly)
 	}
-	app := adw.NewApplication(appID, gio.ApplicationFlagsNone)
+	flags := gio.ApplicationFlagsNone
+	shot := os.Getenv("AXIS_IP_TOOL_SCREENSHOT")
+	if shot != "" {
+		flags = gio.ApplicationNonUnique // separate instance even if the app is already running
+	}
+	app := adw.NewApplication(appID, flags)
 
 	about := gio.NewSimpleAction("about", nil)
 	about.ConnectActivate(func(_ *glibVariant) { showAbout(app) })
@@ -41,7 +46,12 @@ func main() {
 			w.Present()
 			return
 		}
-		newWindow(app).Present()
+		w := newWindow(app)
+		w.Present()
+		if shot != "" {
+			w.SetDefaultSize(1400, 300)
+			w.screenshotAndQuit(shot, 12) // see screenshot.go
+		}
 	})
 	os.Exit(app.Run(os.Args))
 }
@@ -51,8 +61,8 @@ func showAbout(app *adw.Application) {
 	d.SetApplicationName("Axis IP Tool")
 	d.SetApplicationIcon(appID)
 	d.SetVersion(version)
-	d.SetComments("Axis-Geräte im Netzwerk finden und grundlegend konfigurieren – " +
-		"inspiriert von der AXIS IP Utility.\n\nKein offizielles Produkt der Axis Communications AB.")
-	d.SetLicenseType(gtk.LicenseGPL30)
+	d.SetComments("Find Axis devices on the network and do their basic configuration – " +
+		"inspired by the AXIS IP Utility.\n\nNot an official product of Axis Communications AB.")
+	d.SetLicenseType(gtk.LicenseAGPL30)
 	d.Present(app.ActiveWindow())
 }

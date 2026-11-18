@@ -1,11 +1,11 @@
 #!/bin/sh
-# Axis IP Tool – Installation mit einem Befehl
+# Axis IP Tool – installation with one command
 #
 #   curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/download/install.sh | sh
 #
-# Optionen (nach „sh -s --“ anhängen):
-#   --uninstall     alles wieder entfernen
-#   --flatpak       Flatpak statt Systempaket (Standard auf Silverblue/Bazzite & Co.)
+# Options (append after "sh -s --"):
+#   --uninstall     remove everything again
+#   --flatpak       Flatpak instead of system package (default on Silverblue/Bazzite & co.)
 set -eu
 
 REPO="${AXIS_IP_TOOL_REPO:-reschcloud/axis-ip-tool-linux}"
@@ -18,12 +18,12 @@ for a in "$@"; do
     --uninstall) mode=uninstall ;;
     --flatpak) app=flatpak ;;
     -h|--help) sed -n '2,8p' "$0" 2>/dev/null || true; exit 0 ;;
-    *) echo "Unbekannte Option: $a" >&2; exit 2 ;;
+    *) echo "Unknown option: $a" >&2; exit 2 ;;
   esac
 done
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
-die() { printf 'Fehler: %s\n' "$*" >&2; exit 1; }
+die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 
 if [ -e /run/ostree-booted ]; then fam=ostree
 elif command -v dnf >/dev/null; then fam=dnf
@@ -38,12 +38,12 @@ if [ "$app" = pkg ] || { [ "$mode" = uninstall ] && [ "$fam" != ostree ] && [ "$
   if [ "$(id -u)" -eq 0 ]; then SUDO=""
   elif command -v sudo >/dev/null; then SUDO=sudo
   elif command -v run0 >/dev/null; then SUDO=run0
-  else die "sudo wird benötigt"; fi
+  else die "sudo is required"; fi
 fi
 
-# ---------------------------------------------------------------- Deinstallation
+# ---------------------------------------------------------------- Uninstall
 if [ "$mode" = uninstall ]; then
-  say "Entferne Axis IP Tool …"
+  say "Removing Axis IP Tool …"
   case $fam in
     dnf)    $SUDO dnf remove -y axis-ip-tool || true ;;
     apt)    $SUDO apt-get remove -y axis-ip-tool || true ;;
@@ -52,7 +52,7 @@ if [ "$mode" = uninstall ]; then
   if command -v flatpak >/dev/null && flatpak info "$APP_ID" >/dev/null 2>&1; then
     flatpak uninstall -y "$APP_ID" || true
   fi
-  say "Fertig."
+  say "Done."
   exit 0
 fi
 
@@ -60,18 +60,18 @@ fi
 case "$(uname -m)" in
   x86_64)        arch=x86_64  debarch=amd64 ;;
   aarch64|arm64) arch=aarch64 debarch=arm64 ;;
-  *) die "fertige Pakete gibt es nur für x86_64 und aarch64 – bitte aus dem Quellcode bauen (make && sudo make install)" ;;
+  *) die "prebuilt packages are only available for x86_64 and aarch64 – please build from source (make && sudo make install)" ;;
 esac
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-get() { say "Lade $1 …"; curl -fL --proto '=https' -o "$tmp/$1" "$BASE/$1"; }
+get() { say "Downloading $1 …"; curl -fL --proto '=https' -o "$tmp/$1" "$BASE/$1"; }
 
 if [ "$app" = flatpak ]; then
-  command -v flatpak >/dev/null || die "flatpak ist nicht installiert"
+  command -v flatpak >/dev/null || die "flatpak is not installed"
   flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
   get "$APP_ID.$arch.flatpak"
-  flatpak install --user -y --reinstall "$tmp/$APP_ID.$arch.flatpak" # --reinstall = Update
+  flatpak install --user -y --reinstall "$tmp/$APP_ID.$arch.flatpak" # --reinstall = update
 else
   case $fam in
     dnf)    ext=$arch.rpm ;;
@@ -79,7 +79,7 @@ else
     pacman) ext=$arch.pkg.tar.zst ;;
   esac
   get "axis-ip-tool.$ext"
-  say "Installiere Paket (Administratorpasswort erforderlich) …"
+  say "Installing package (administrator password required) …"
   case $fam in
     dnf)    $SUDO dnf install -y "$tmp/axis-ip-tool.$ext" ;;
     apt)    $SUDO apt-get install -y "$tmp/axis-ip-tool.$ext" ;;
@@ -87,4 +87,4 @@ else
   esac
 fi
 
-say "Fertig! Axis IP Tool ist jetzt im App-Menü."
+say "Done! Axis IP Tool is now in the app menu."

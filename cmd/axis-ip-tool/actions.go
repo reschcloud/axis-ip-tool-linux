@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package main
 
@@ -19,7 +19,7 @@ import (
 	"axis-ip-tool/internal/axis"
 )
 
-// ---------------------------------------------------------------- Bausteine
+// ---------------------------------------------------------------- Building blocks
 
 type formDialog struct {
 	*adw.Dialog
@@ -38,13 +38,13 @@ func newFormDialog(title, applyLabel string, width int) *formDialog {
 	hb := adw.NewHeaderBar()
 	hb.SetShowEndTitleButtons(false)
 	hb.SetShowStartTitleButtons(false)
-	cancel := gtk.NewButtonWithLabel("Abbrechen")
+	cancel := gtk.NewButtonWithLabel("Cancel")
 	cancel.ConnectClicked(func() { d.Close() })
 	hb.PackStart(cancel)
 	d.apply = gtk.NewButtonWithLabel(applyLabel)
 	d.apply.AddCSSClass("suggested-action")
 	hb.PackEnd(d.apply)
-	d.SetDefaultWidget(d.apply) // Enter in einem Eingabefeld = Übernehmen
+	d.SetDefaultWidget(d.apply) // Enter in an entry = apply
 	d.spinner = gtk.NewSpinner()
 	d.spinner.SetVisible(false)
 	hb.PackEnd(d.spinner)
@@ -133,7 +133,7 @@ func switchRow(title string, active bool) *adw.SwitchRow {
 	return r
 }
 
-// disableWhenOn graut Zeilen aus, solange der Schalter an ist (z. B. „per DHCP“).
+// disableWhenOn greys out rows while the switch is on (e.g. "via DHCP").
 func disableWhenOn(sw *adw.SwitchRow, rows ...gtk.Widgetter) {
 	upd := func() {
 		for _, r := range rows {
@@ -164,16 +164,16 @@ func label(d *axis.Device) string {
 	return d.IP
 }
 
-// ---------------------------------------------------------------- Anmeldung
+// ---------------------------------------------------------------- Login
 
-// withLogin führt action mit gespeicherten Zugangsdaten aus und fragt bei
-// Bedarf (erneut) nach Benutzer und Passwort.
+// withLogin runs action with stored credentials and asks for user and password
+// (again) if necessary.
 func withLogin[T any](w *window, d *axis.Device, what string,
 	action func(context.Context, *axis.Client) (T, error), done func(T)) {
 
 	if d.NeedsSetup != nil && *d.NeedsSetup {
-		// Werkszustand: Anmelden ist unmöglich, erst einen Benutzer anlegen
-		w.toast(label(d) + ": noch kein Benutzer angelegt – bitte zuerst ein Passwort setzen")
+		// factory state: logging in is impossible, create a user first
+		w.toast(label(d) + ": no user created yet – please set a password first")
 		w.selectKey(d.Key())
 		w.onPassword()
 		return
@@ -223,20 +223,20 @@ func (w *window) askLogin(d *axis.Device, errMsg string, cb func(user, pass stri
 	if errMsg != "" {
 		body += "\n\n" + errMsg
 	}
-	dlg := adw.NewAlertDialog("Anmeldung erforderlich", body)
-	user := entryRow("Benutzername", "root")
+	dlg := adw.NewAlertDialog("Login required", body)
+	user := entryRow("User name", "root")
 	if c, ok := w.creds[d.Key()]; ok {
 		user.SetText(c[0])
 	} else if w.lastUser != "" {
 		user.SetText(w.lastUser)
 	}
-	pass := passwordRow("Passwort")
+	pass := passwordRow("Password")
 	pass.SetActivatesDefault(true)
 	extra := gtk.NewBox(gtk.OrientationVertical, 12)
 	extra.Append(boxedList(user, pass))
 	forAll := gtk.NewCheckButtonWithLabel("")
 	if n := len(w.loginCandidates(d.Key())); n > 0 {
-		forAll.SetLabel(fmt.Sprintf("Diese Zugangsdaten auch bei allen anderen nicht angemeldeten Geräten verwenden (%d)", n))
+		forAll.SetLabel(fmt.Sprintf("Use these credentials for all other devices that are not logged in too (%d)", n))
 		forAll.SetActive(w.lastForAll)
 		if l, ok := forAll.Child().(*gtk.Label); ok {
 			l.SetWrap(true)
@@ -245,8 +245,8 @@ func (w *window) askLogin(d *axis.Device, errMsg string, cb func(user, pass stri
 		extra.Append(forAll)
 	}
 	dlg.SetExtraChild(extra)
-	dlg.AddResponse("cancel", "Abbrechen")
-	dlg.AddResponse("ok", "Anmelden")
+	dlg.AddResponse("cancel", "Cancel")
+	dlg.AddResponse("ok", "Log in")
 	dlg.SetResponseAppearance("ok", adw.ResponseSuggested)
 	dlg.SetDefaultResponse("ok")
 	dlg.SetCloseResponse("cancel")
@@ -261,8 +261,8 @@ func (w *window) askLogin(d *axis.Device, errMsg string, cb func(user, pass stri
 	pass.GrabFocus()
 }
 
-// loginCandidates: alle anderen erreichbaren Geräte ohne geprüfte Anmeldung
-// (gesperrt, nicht angemeldet oder Passwort falsch), aber nicht im Werkszustand.
+// loginCandidates: all other reachable devices without verified login
+// (locked, not logged in or wrong password), but not in factory state.
 func (w *window) loginCandidates(except string) []string {
 	var keys []string
 	for _, d := range w.reg.All() {
@@ -275,7 +275,7 @@ func (w *window) loginCandidates(except string) []string {
 	return keys
 }
 
-// unlockOthers probiert die Zugangsdaten bei allen übrigen Kandidaten und meldet das Ergebnis.
+// unlockOthers tries the credentials on all remaining candidates and reports the result.
 func (w *window) unlockOthers(except, user, pass string) {
 	keys := w.loginCandidates(except)
 	if len(keys) == 0 {
@@ -290,11 +290,11 @@ func (w *window) unlockOthers(except, user, pass string) {
 		}
 		switch ok {
 		case len(keys):
-			w.toast(fmt.Sprintf("Zugangsdaten bei allen %d weiteren Geräten gültig", ok))
+			w.toast(fmt.Sprintf("Credentials valid on all %d other devices", ok))
 		case 0:
-			w.toast("Zugangsdaten bei keinem weiteren Gerät gültig")
+			w.toast("Credentials not valid on any other device")
 		default:
-			w.toast(fmt.Sprintf("Zugangsdaten bei %d von %d weiteren Geräten gültig", ok, len(keys)))
+			w.toast(fmt.Sprintf("Credentials valid on %d of %d other devices", ok, len(keys)))
 		}
 	}
 	for _, key := range keys {
@@ -315,7 +315,7 @@ func (w *window) unlockOthers(except, user, pass string) {
 				w.onDevice(context.Background(), asUpdate(info, dev))
 			}
 			finish()
-		}, func(error) { // andere Zugangsdaten: Status bleibt, wie er ist
+		}, func(error) { // different credentials: the status stays as it is
 			delete(w.infoPending, key)
 			if reg == w.reg {
 				w.rerender(key)
@@ -325,8 +325,8 @@ func (w *window) unlockOthers(except, user, pass string) {
 	}
 }
 
-// loginInfo prüft die Zugangsdaten und liest Modell, Firmware und den konfigurierten
-// Hostnamen. Das Ergebnis eignet sich direkt für onDevice (Serial/IP ergänzen).
+// loginInfo verifies the credentials and reads model, firmware and the configured
+// hostname. The result is suitable for onDevice directly (add serial/IP).
 func loginInfo(ctx context.Context, c *axis.Client) (axis.Device, error) {
 	if err := c.CheckLogin(ctx); err != nil {
 		return axis.Device{}, err
@@ -342,13 +342,13 @@ func loginInfo(ctx context.Context, c *axis.Client) (axis.Device, error) {
 	return out, nil
 }
 
-// asUpdate ergänzt ein loginInfo-Ergebnis um die Identität des Geräts.
+// asUpdate adds the device identity to a loginInfo result.
 func asUpdate(info axis.Device, dev *axis.Device) axis.Device {
 	info.Serial, info.IP, info.Port = dev.Serial, dev.IP, dev.Port
 	return info
 }
 
-// ---------------------------------------------------------------- Aktionen
+// ---------------------------------------------------------------- Actions
 
 func (w *window) onBrowser() {
 	d := w.selected()
@@ -363,53 +363,76 @@ func (w *window) onPassword() {
 	if d == nil {
 		return
 	}
-	user := entryRow("Benutzername", "root")
-	p1 := passwordRow("Passwort")
-	p2 := passwordRow("Passwort wiederholen")
-	dlg := newFormDialog("Passwort – "+label(d), "Setzen", 460)
+	user := entryRow("User name", "root")
+	p1 := passwordRow("Password")
+	p2 := passwordRow("Repeat password")
+	dlg := newFormDialog("Password – "+label(d), "Set", 460)
 	if d.NeedsSetup != nil && !*d.NeedsSetup {
-		dlg.add(note("Auf diesem Gerät ist bereits ein Benutzer eingerichtet. Zum Ändern des " +
-			"Passworts bitte die Weboberfläche verwenden oder das Gerät zurücksetzen."))
+		dlg.add(note("A user is already set up on this device. To change the password, " +
+			"please use the web interface or reset the device."))
 	} else {
-		dlg.add(note("Legt den ersten Administrator auf einem Gerät im Werkszustand an. " +
-			"Ab AXIS OS 10 ist auch ein anderer Benutzername als „root“ möglich."))
+		dlg.add(note("Creates the first administrator on a device in factory state. " +
+			"From AXIS OS 10 on, a user name other than \"root\" is possible too."))
 	}
 	if d.HTTPS != nil && !*d.HTTPS {
-		warn := note("⚠ Dieses Gerät ist nur per HTTP erreichbar. Das Passwort wird unverschlüsselt " +
-			"übertragen und kann im lokalen Netz mitgelesen werden.")
+		warn := note("⚠ This device is only reachable via HTTP. The password is transmitted " +
+			"unencrypted and can be read by others on the local network.")
 		warn.RemoveCSSClass("dim-label")
 		warn.AddCSSClass("warning")
 		dlg.add(warn)
 	}
 	dlg.add(boxedList(user, p1, p2))
+	// power line frequency/mounting position only at commissioning (device without user)
+	freq, mount := setupRows()
+	if d.NeedsSetup == nil || *d.NeedsSetup {
+		dlg.add(heading("Commissioning"))
+		dlg.add(boxedList(freq, mount))
+	}
+	initial := d.NeedsSetup == nil || *d.NeedsSetup
 	dlg.SetFocus(p1)
 	key, ip, port := d.Key(), d.IP, d.Port
 	dlg.apply.ConnectClicked(func() {
 		u, a, b := strings.TrimSpace(user.Text()), p1.Text(), p2.Text()
 		switch {
 		case u == "" || a == "":
-			dlg.toast("Benutzername und Passwort erforderlich")
+			dlg.toast("User name and password required")
 			return
 		case a != b:
-			dlg.toast("Passwörter stimmen nicht überein")
+			dlg.toast("Passwords don't match")
 			return
 		case len(a) < 8:
-			dlg.toast("Bitte mindestens 8 Zeichen verwenden")
+			dlg.toast("Please use at least 8 characters")
 			return
 		}
+		var setup axis.InitialSetup
+		if initial {
+			setup = readSetup(freq, mount)
+		}
 		dlg.busy(true)
-		async(func() (struct{}, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		type result struct {
+			skipped  []string
+			setupErr error
+		}
+		async(func() (result, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 			defer cancel()
-			return struct{}{}, axis.NewClient(ip, port, "", "").CreateInitialUser(ctx, u, a)
-		}, func(struct{}) {
+			if err := axis.NewClient(ip, port, "", "").CreateInitialUser(ctx, u, a); err != nil {
+				return result{}, err
+			}
+			// the user exists – only report errors of the image settings
+			var r result
+			if !setup.Empty() {
+				r.skipped, r.setupErr = axis.NewClient(ip, port, u, a).ApplyInitialSetup(ctx, setup)
+			}
+			return r, nil
+		}, func(r result) {
 			w.creds[key] = [2]string{u, a}
 			if dev := w.reg.Get(key); dev != nil {
 				f := false
 				dev.NeedsSetup = &f
 				w.onDevice(context.Background(), *dev)
 			}
-			w.toast(fmt.Sprintf("Benutzer „%s“ auf %s angelegt", u, ip))
+			w.toast(fmt.Sprintf("User \"%s\" created on %s%s", u, ip, setupResult(setup, r.skipped, r.setupErr)))
 			dlg.Close()
 		}, func(err error) {
 			dlg.busy(false)
@@ -425,33 +448,33 @@ func (w *window) onNetwork() {
 		return
 	}
 	if d.NeedsSetup != nil && *d.NeedsSetup {
-		w.toast("Zuerst ein Passwort setzen")
+		w.toast("Set a password first")
 		w.onPassword()
 		return
 	}
-	withLogin(w, d, "Netzwerk", func(ctx context.Context, c *axis.Client) (axis.NetworkConfig, error) {
+	withLogin(w, d, "Network", func(ctx context.Context, c *axis.Client) (axis.NetworkConfig, error) {
 		return c.GetNetwork(ctx)
 	}, func(cfg axis.NetworkConfig) { w.networkDialog(d, cfg) })
 }
 
 func (w *window) networkDialog(d *axis.Device, cfg axis.NetworkConfig) {
-	dhcp := switchRow("IPv4 per DHCP beziehen", cfg.DHCP)
-	addr := entryRow("IP-Adresse", cfg.Address)
-	mask := entryRow("Subnetzmaske / Präfix", axis.PrefixToMask(cfg.Prefix))
-	gw := entryRow("Standard-Gateway", cfg.Gateway)
+	dhcp := switchRow("Obtain IPv4 via DHCP", cfg.DHCP)
+	addr := entryRow("IP address", cfg.Address)
+	mask := entryRow("Subnet mask / prefix", axis.PrefixToMask(cfg.Prefix))
+	gw := entryRow("Default gateway", cfg.Gateway)
 	disableWhenOn(dhcp, addr, mask, gw)
 
-	hostDHCP := switchRow("Hostname per DHCP", cfg.HostnameFromDHCP)
+	hostDHCP := switchRow("Hostname via DHCP", cfg.HostnameFromDHCP)
 	host := entryRow("Hostname", cfg.Hostname)
 	disableWhenOn(hostDHCP, host)
 
-	dnsDHCP := switchRow("DNS-Server per DHCP", cfg.DNSFromDHCP)
+	dnsDHCP := switchRow("DNS servers via DHCP", cfg.DNSFromDHCP)
 	dns := []string{"", ""}
 	copy(dns, cfg.DNS)
-	dns1, dns2 := entryRow("DNS-Server 1", dns[0]), entryRow("DNS-Server 2", dns[1])
+	dns1, dns2 := entryRow("DNS server 1", dns[0]), entryRow("DNS server 2", dns[1])
 	disableWhenOn(dnsDHCP, dns1, dns2)
 
-	dlg := newFormDialog("Netzwerk – "+label(d), "Übernehmen", 500)
+	dlg := newFormDialog("Network – "+label(d), "Apply", 500)
 	dlg.add(heading("IPv4"))
 	dlg.add(boxedList(dhcp, addr, mask, gw))
 	dlg.add(heading("Hostname"))
@@ -459,7 +482,7 @@ func (w *window) networkDialog(d *axis.Device, cfg axis.NetworkConfig) {
 	dlg.add(heading("DNS"))
 	dlg.add(boxedList(dnsDHCP, dns1, dns2))
 	if cfg.Legacy {
-		dlg.add(note("Ältere Firmware: Konfiguration über param.cgi"))
+		dlg.add(note("Older firmware: configuration via param.cgi"))
 	}
 
 	oldIP, key := d.IP, d.Key()
@@ -499,13 +522,13 @@ func (w *window) networkDialog(d *axis.Device, cfg axis.NetworkConfig) {
 			switch {
 			case !n.DHCP && n.Address != oldIP:
 				w.creds[key] = creds
-				w.toast("Neue Adresse " + n.Address + " gesetzt – Suche wird aktualisiert")
+				w.toast("New address " + n.Address + " set – refreshing discovery")
 				glib.TimeoutSecondsAdd(5, func() { w.rescan() })
 			case n.DHCP != cfg.DHCP:
-				w.toast("Auf DHCP umgestellt – Suche wird aktualisiert")
+				w.toast("Switched to DHCP – refreshing discovery")
 				glib.TimeoutSecondsAdd(8, func() { w.rescan() })
 			default:
-				w.toast("Netzwerkeinstellungen gespeichert")
+				w.toast("Network settings saved")
 			}
 			if dev := w.reg.Get(key); dev != nil && !n.HostnameFromDHCP && n.Hostname != "" {
 				w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP, Port: dev.Port,
@@ -519,7 +542,7 @@ func (w *window) networkDialog(d *axis.Device, cfg axis.NetworkConfig) {
 	dlg.Present(w)
 }
 
-// ntpState ist das Ergebnis der NTP-Abfrage; Err != nil heißt „NTP nicht einstellbar“.
+// ntpState is the result of the NTP query; Err != nil means "NTP not configurable".
 type ntpState struct {
 	Cfg axis.NTPConfig
 	Err error
@@ -531,11 +554,11 @@ func (w *window) onTime() {
 		return
 	}
 	if d.NeedsSetup != nil && *d.NeedsSetup {
-		w.toast("Zuerst ein Passwort setzen")
+		w.toast("Set a password first")
 		w.onPassword()
 		return
 	}
-	withLogin(w, d, "Datum & Zeit", func(ctx context.Context, c *axis.Client) (ntpState, error) {
+	withLogin(w, d, "Date & time", func(ctx context.Context, c *axis.Client) (ntpState, error) {
 		cfg, err := c.GetNTP(ctx)
 		if errors.Is(err, axis.ErrAuth) {
 			return ntpState{}, err
@@ -546,18 +569,18 @@ func (w *window) onTime() {
 
 func (w *window) timeDialog(d *axis.Device, st ntpState) {
 	cfg := st.Cfg
-	tz := entryRow("Zeitzone (IANA, z. B. Europe/Vienna)", localTZ())
+	tz := entryRow("Time zone (IANA, e.g. Europe/Vienna)", localTZ())
 
-	ntpOn := switchRow("Uhrzeit per NTP synchronisieren", cfg.Enabled)
-	ntpDHCP := switchRow("NTP-Server per DHCP beziehen", cfg.FromDHCP)
+	ntpOn := switchRow("Synchronize time via NTP", cfg.Enabled)
+	ntpDHCP := switchRow("Obtain NTP servers via DHCP", cfg.FromDHCP)
 	srv := []string{"", ""}
 	copy(srv, cfg.Servers)
 	if !cfg.Enabled && srv[0] == "" {
 		srv[0] = "pool.ntp.org"
 	}
-	ntp1, ntp2 := entryRow("NTP-Server 1", srv[0]), entryRow("NTP-Server 2", srv[1])
-	manual := switchRow("Uhrzeit jetzt von diesem Rechner übernehmen", !cfg.Enabled)
-	manual.SetSubtitle("Nur ohne NTP sinnvoll")
+	ntp1, ntp2 := entryRow("NTP server 1", srv[0]), entryRow("NTP server 2", srv[1])
+	manual := switchRow("Take the time from this computer now", !cfg.Enabled)
+	manual.SetSubtitle("Only useful without NTP")
 
 	upd := func() {
 		on := ntpOn.Active() && st.Err == nil
@@ -570,31 +593,31 @@ func (w *window) timeDialog(d *axis.Device, st ntpState) {
 	ntpDHCP.NotifyProperty("active", upd)
 	upd()
 
-	dlg := newFormDialog("Datum & Zeit – "+label(d), "Übernehmen", 500)
-	dlg.add(heading("Zeitzone"))
+	dlg := newFormDialog("Date & time – "+label(d), "Apply", 500)
+	dlg.add(heading("Time zone"))
 	dlg.add(boxedList(tz))
-	dlg.add(heading("Zeitsynchronisierung (NTP)"))
+	dlg.add(heading("Time synchronization (NTP)"))
 	if st.Err != nil {
 		ntpOn.SetSensitive(false)
-		dlg.add(note("NTP-Einstellungen konnten nicht gelesen werden: " + st.Err.Error()))
+		dlg.add(note("NTP settings could not be read: " + st.Err.Error()))
 	} else {
 		dlg.add(boxedList(ntpOn, ntpDHCP, ntp1, ntp2))
 		var info []string
 		if cfg.Enabled && len(cfg.Active) > 0 {
-			info = append(info, "Verwendete Server: "+strings.Join(cfg.Active, ", "))
+			info = append(info, "Servers in use: "+strings.Join(cfg.Active, ", "))
 		}
 		if cfg.Enabled && cfg.Synced != nil {
-			info = append(info, map[bool]string{true: "Uhrzeit ist synchronisiert.",
-				false: "Uhrzeit ist noch nicht synchronisiert."}[*cfg.Synced])
+			info = append(info, map[bool]string{true: "Time is synchronized.",
+				false: "Time is not synchronized yet."}[*cfg.Synced])
 		}
 		if cfg.Legacy {
-			info = append(info, "Ältere Firmware: nur ein NTP-Server über param.cgi.")
+			info = append(info, "Older firmware: only one NTP server via param.cgi.")
 		}
 		if len(info) > 0 {
 			dlg.add(note(strings.Join(info, "\n")))
 		}
 	}
-	dlg.add(heading("Manuell"))
+	dlg.add(heading("Manual"))
 	dlg.add(boxedList(manual))
 
 	key, ip, port := d.Key(), d.IP, d.Port
@@ -623,7 +646,7 @@ func (w *window) timeDialog(d *axis.Device, st ntpState) {
 			return struct{}{}, c.SetTime(ctx, name, syncNow)
 		}, func(struct{}) {
 			dlg.Close()
-			w.toast("Datum & Zeit gespeichert")
+			w.toast("Date & time saved")
 		}, func(err error) {
 			dlg.busy(false)
 			dlg.toast(err.Error())
@@ -632,7 +655,7 @@ func (w *window) timeDialog(d *axis.Device, st ntpState) {
 	dlg.Present(w)
 }
 
-// ---------------------------------------------------------------- Vorschau
+// ---------------------------------------------------------------- Preview
 
 const previewWidth = 1280
 
@@ -642,18 +665,18 @@ func (w *window) onPreview() {
 		return
 	}
 	if d.NeedsSetup != nil && *d.NeedsSetup {
-		w.toast("Zuerst ein Passwort setzen")
+		w.toast("Set a password first")
 		w.onPassword()
 		return
 	}
-	withLogin(w, d, "Vorschau", func(ctx context.Context, c *axis.Client) ([]byte, error) {
+	withLogin(w, d, "Preview", func(ctx context.Context, c *axis.Client) ([]byte, error) {
 		return c.Snapshot(ctx, previewWidth)
 	}, func(img []byte) { w.previewDialog(d, img) })
 }
 
 func (w *window) previewDialog(d *axis.Device, first []byte) {
 	dlg := adw.NewDialog()
-	dlg.SetTitle("Vorschau – " + label(d))
+	dlg.SetTitle("Preview – " + label(d))
 	dlg.SetContentWidth(960)
 	dlg.SetContentHeight(620)
 
@@ -669,10 +692,10 @@ func (w *window) previewDialog(d *axis.Device, first []byte) {
 
 	live := gtk.NewToggleButton()
 	live.SetIconName("media-playback-start-symbolic")
-	live.SetTooltipText("Automatisch aktualisieren (1 Bild/s)")
+	live.SetTooltipText("Refresh automatically (1 image/s)")
 	live.SetActive(true)
 	refresh := gtk.NewButtonFromIconName("view-refresh-symbolic")
-	refresh.SetTooltipText("Bild neu laden")
+	refresh.SetTooltipText("Reload image")
 
 	hb := adw.NewHeaderBar()
 	hb.PackStart(live)
@@ -689,11 +712,11 @@ func (w *window) previewDialog(d *axis.Device, first []byte) {
 	show := func(img []byte) {
 		tex, err := gdk.NewTextureFromBytes(glib.NewBytes(img))
 		if err != nil {
-			status.SetText("Bild nicht lesbar: " + err.Error())
+			status.SetText("Image not readable: " + err.Error())
 			return
 		}
 		pic.SetPaintable(tex)
-		status.SetText(fmt.Sprintf("%d × %d · Stand %s", tex.Width(), tex.Height(), time.Now().Format("15:04:05")))
+		status.SetText(fmt.Sprintf("%d × %d · as of %s", tex.Width(), tex.Height(), time.Now().Format("15:04:05")))
 	}
 	show(first)
 
@@ -740,42 +763,42 @@ func (w *window) onRestart() {
 	if d == nil {
 		return
 	}
-	dlg := adw.NewAlertDialog("Gerät neu starten?", fmt.Sprintf("%s (%s) wird neu gestartet.", label(d), d.IP))
-	dlg.AddResponse("cancel", "Abbrechen")
-	dlg.AddResponse("restart", "Neu starten")
+	dlg := adw.NewAlertDialog("Restart device?", fmt.Sprintf("%s (%s) will be restarted.", label(d), d.IP))
+	dlg.AddResponse("cancel", "Cancel")
+	dlg.AddResponse("restart", "Restart")
 	dlg.SetResponseAppearance("restart", adw.ResponseDestructive)
 	dlg.SetCloseResponse("cancel")
 	dlg.ConnectResponse(func(r string) {
 		if r != "restart" {
 			return
 		}
-		withLogin(w, d, "Neustart", func(ctx context.Context, c *axis.Client) (struct{}, error) {
+		withLogin(w, d, "Restart", func(ctx context.Context, c *axis.Client) (struct{}, error) {
 			return struct{}{}, c.Restart(ctx)
-		}, func(struct{}) { w.toast("Neustart ausgelöst") })
+		}, func(struct{}) { w.toast("Restart triggered") })
 	})
 	dlg.Present(w)
 }
 
-// onReset setzt das Gerät nach Rückfrage auf Werkseinstellungen zurück.
+// onReset resets the device to factory defaults after confirmation.
 func (w *window) onReset() {
 	d := w.selected()
 	if d == nil {
 		return
 	}
-	dlg := adw.NewAlertDialog("Auf Werkseinstellungen zurücksetzen?",
-		fmt.Sprintf("%s (%s)\n\nAlle Einstellungen, Benutzer und Passwörter werden gelöscht. "+
-			"Das Gerät startet neu und muss danach mit einem Erstpasswort neu eingerichtet werden.",
+	dlg := adw.NewAlertDialog("Reset to factory defaults?",
+		fmt.Sprintf("%s (%s)\n\nAll settings, users and passwords will be deleted. "+
+			"The device restarts and must then be set up again with an initial password.",
 			label(d), d.IP))
-	keep := gtk.NewCheckButtonWithLabel("Netzwerkeinstellungen (IP-Adresse) behalten")
+	keep := gtk.NewCheckButtonWithLabel("Keep network settings (IP address)")
 	keep.SetActive(true)
 	hint := note("")
 	hint.SetMarginStart(28)
 	updHint := func() {
 		if keep.Active() {
-			hint.SetText("Das Gerät bleibt unter " + d.IP + " erreichbar.")
+			hint.SetText("The device stays reachable at " + d.IP + ".")
 		} else {
-			hint.SetText("Das Gerät holt sich danach per DHCP eine Adresse, ohne DHCP-Server " +
-				"nimmt es 192.168.0.90.")
+			hint.SetText("The device then obtains an address via DHCP; without a DHCP server " +
+				"it uses 192.168.0.90.")
 		}
 	}
 	keep.ConnectToggled(updHint)
@@ -784,8 +807,8 @@ func (w *window) onReset() {
 	extra.Append(keep)
 	extra.Append(hint)
 	dlg.SetExtraChild(extra)
-	dlg.AddResponse("cancel", "Abbrechen")
-	dlg.AddResponse("reset", "Zurücksetzen")
+	dlg.AddResponse("cancel", "Cancel")
+	dlg.AddResponse("reset", "Reset")
 	dlg.SetResponseAppearance("reset", adw.ResponseDestructive)
 	dlg.SetDefaultResponse("cancel")
 	dlg.SetCloseResponse("cancel")
@@ -795,8 +818,8 @@ func (w *window) onReset() {
 			return
 		}
 		keepNet := keep.Active()
-		withLogin(w, d, "Zurücksetzen", func(ctx context.Context, c *axis.Client) (struct{}, error) {
-			if err := c.CheckLogin(ctx); err != nil { // nicht anonym auslösen lassen
+		withLogin(w, d, "Reset", func(ctx context.Context, c *axis.Client) (struct{}, error) {
+			if err := c.CheckLogin(ctx); err != nil { // don't allow triggering it anonymously
 				return struct{}{}, err
 			}
 			return struct{}{}, c.FactoryReset(ctx, keepNet)
@@ -808,9 +831,9 @@ func (w *window) onReset() {
 					Port: dev.Port, Online: true, NeedsSetup: &yes})
 			}
 			if keepNet {
-				w.toast(label(d) + " wird zurückgesetzt und startet neu (ca. 1–2 Minuten)")
+				w.toast(label(d) + " is being reset and restarts (about 1–2 minutes)")
 			} else {
-				w.toast(label(d) + " wird zurückgesetzt – danach neu suchen, die IP-Adresse ändert sich")
+				w.toast(label(d) + " is being reset – search again afterwards, the IP address changes")
 			}
 		})
 	})

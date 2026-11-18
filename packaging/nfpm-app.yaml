@@ -1,4 +1,4 @@
-# nfpm-Konfiguration: GUI + CLI. Bauen mit `make packages`.
+# nfpm configuration: GUI + CLI. Build with `make packages`.
 name: axis-ip-tool
 arch: ${ARCH}
 platform: linux
@@ -8,10 +8,10 @@ section: net
 priority: optional
 maintainer: Axis IP Tool <noreply@example.invalid>
 description: |
-  Axis-Netzwerkkameras finden und einrichten.
-  GNOME-App und Kommandozeilenwerkzeug (axisctl), angelehnt an die AXIS IP Utility.
-  Kein offizielles Produkt der Axis Communications AB.
-license: GPL-3.0-or-later
+  Find and set up Axis network cameras.
+  GNOME app and command line tool (axisctl), modeled on the AXIS IP Utility.
+  Not an official product of Axis Communications AB.
+license: AGPL-3.0-or-later
 homepage: https://github.com/reschcloud/axis-ip-tool-linux
 
 contents:

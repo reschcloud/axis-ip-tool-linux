@@ -1,8 +1,8 @@
-# Tests bei jedem Push/PR; bei einem Tag „v*“ zusätzlich Pakete bauen und als Release veröffentlichen.
+# Tests on every push/PR; on a tag "v*" additionally build packages and publish them as a release.
 #
 #   git tag v0.1.0 && git push origin v0.1.0
 #
-# Gebaut wird nativ auf x86_64 und arm64 (GitHub-Runner ubuntu-24.04-arm, für öffentliche Repos frei).
+# Built natively on x86_64 and arm64 (GitHub runner ubuntu-24.04-arm, free for public repos).
 name: Build & Release
 
 on:
@@ -23,19 +23,19 @@ jobs:
         include:
           - { runner: ubuntu-24.04,     goarch: amd64, arch: x86_64,  debarch: amd64 }
           - { runner: ubuntu-24.04-arm, goarch: arm64, arch: aarch64, debarch: arm64 }
-    # Ältestes unterstütztes Ubuntu = älteste glibc → Binaries laufen auch auf Fedora und Arch.
+    # Oldest supported Ubuntu = oldest glibc → binaries also run on Fedora and Arch.
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Tags für packaging/scripts/version.sh
+          fetch-depth: 0 # tags for packaging/scripts/version.sh
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true # GTK-Bindings (cgo) sind sonst bei jedem Lauf 10–15 min
+          cache: true # otherwise the GTK bindings (cgo) take 10–15 min on every run
 
-      - name: Build-Abhängigkeiten
+      - name: Build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -44,15 +44,15 @@ jobs:
       - name: Tests
         run: make test
 
-      - name: Desktop-Datei und Metainfo prüfen
+      - name: Validate desktop file and metainfo
         run: |
           desktop-file-validate data/*.desktop
           appstreamcli validate --no-net data/*.metainfo.xml
 
-      - name: Bauen
+      - name: Build
         run: make build
 
-      - name: Pakete (rpm, deb, arch)
+      - name: Packages (rpm, deb, arch)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GOTOOLCHAIN: auto
@@ -60,7 +60,7 @@ jobs:
         run: |
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
           make packages
-          # Feste Namen, damit install.sh „latest/download/…“ verwenden kann
+          # fixed names so that install.sh can use "latest/download/…"
           cd dist
           mv axis-ip-tool-*.${{ matrix.arch }}.rpm          axis-ip-tool.${{ matrix.arch }}.rpm
           mv axis-ip-tool_*_${{ matrix.debarch }}.deb       axis-ip-tool.${{ matrix.debarch }}.deb
@@ -74,7 +74,7 @@ jobs:
           path: dist/
 
   flatpak:
-    # Nur für Releases. Flatpak-Build ist noch ungetestet und blockiert das Release nicht.
+    # Releases only. The Flatpak build is still untested and doesn't block the release.
     if: startsWith(github.ref, 'refs/tags/v')
     strategy:
       fail-fast: false
@@ -97,7 +97,7 @@ jobs:
           upload-artifact: true
 
   release:
-    # Läuft auch, wenn nur der (optionale) Flatpak-Build fehlschlägt
+    # also runs if only the (optional) Flatpak build fails
     if: ${{ !cancelled() && needs.build.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
     needs: [build, flatpak]
     runs-on: ubuntu-24.04
@@ -108,7 +108,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Dateien einsammeln
+      - name: Collect files
         run: |
           mkdir out
           find artifacts -type f \( -name '*.rpm' -o -name '*.deb' -o -name '*.pkg.tar.zst' -o -name '*.flatpak' \) \

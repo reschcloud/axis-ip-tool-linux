@@ -15,8 +15,8 @@ require (
 	golang.org/x/sys v0.27.0 // indirect
 )
 
-// golang.org/x/* über die offiziellen GitHub-Spiegel beziehen
-// (funktioniert auch ohne Zugriff auf proxy.golang.org).
+// Fetch golang.org/x/* via the official GitHub mirrors
+// (also works without access to proxy.golang.org).
 replace (
 	go4.org/unsafe/assume-no-moving-gc => github.com/go4org/unsafe-assume-no-moving-gc v0.0.0-20231121144256-b99613f794b6
 	golang.org/x/sync => github.com/golang/sync v0.0.0-20210220032951-036812b2e83c

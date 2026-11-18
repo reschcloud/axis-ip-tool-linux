@@ -3,9 +3,8 @@
   <id>io.github.reschcloud.AxisIpTool</id>
   <name>Axis IP Tool</name>
   <summary>Find and set up Axis network cameras</summary>
-  <summary xml:lang="de">Axis-Netzwerkkameras finden und einrichten</summary>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>GPL-3.0-or-later</project_license>
+  <project_license>AGPL-3.0-or-later</project_license>
   <developer id="io.github.reschcloud">
     <name>Axis IP Tool contributors</name>
   </developer>
@@ -13,17 +12,22 @@
     <p>Finds Axis devices on the local network (Bonjour/mDNS and SSDP) and performs the basic
       setup known from the AXIS IP Utility:</p>
     <ul>
-      <li>Create the first administrator on devices in factory default state</li>
+      <li>Monitor devices continuously: ping, login status, IPv6 address and network interface</li>
+      <li>Create the first administrator on devices in factory default state and set power line frequency and mounting position</li>
       <li>Configure IPv4 (DHCP or static), hostname and DNS</li>
       <li>Set time zone, NTP servers or synchronise the clock</li>
       <li>Show a live snapshot preview</li>
       <li>Configure many devices at once: sequential IP addresses, numbered host names or a CSV plan</li>
-      <li>Open the web interface, restart devices or reset them to factory defaults</li>
+      <li>Open the web interface (also via link-local IPv6), restart devices or reset them to factory defaults</li>
     </ul>
-    <p xml:lang="de">Findet Axis-Geräte im lokalen Netz (Bonjour/mDNS und SSDP) und erledigt die
-      Grundeinrichtung wie die AXIS IP Utility.</p>
     <p>Not an official product of Axis Communications AB.</p>
   </description>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Discovered cameras with status, IPv6 address and ping</caption>
+      <image>https://raw.githubusercontent.com/reschcloud/axis-ip-tool-linux/v0.3.0/data/screenshots/main-window.png</image>
+    </screenshot>
+  </screenshots>
   <url type="homepage">https://github.com/reschcloud/axis-ip-tool-linux</url>
   <url type="bugtracker">https://github.com/reschcloud/axis-ip-tool-linux/issues</url>
   <launchable type="desktop-id">io.github.reschcloud.AxisIpTool.desktop</launchable>
@@ -40,6 +44,13 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.0" date="2026-11-18">
+      <description>
+        <p>English user interface. Continuous monitoring with ping and status, IPv6 address and interface
+          columns, web interface via link-local IPv6, power line frequency and mounting position at
+          commissioning, more reliable factory state detection. License changed to AGPL-3.0-or-later.</p>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-11-17">
       <description><p>Configure many devices at once, login status with password check, factory reset, host name column.</p></description>
     </release>

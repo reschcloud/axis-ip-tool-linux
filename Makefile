@@ -1,10 +1,10 @@
 # Axis IP Tool
 #
-#   make                 alles bauen (GUI benötigt gtk4- und libadwaita-Entwicklungspakete)
-#   sudo make install    installieren (GUI, CLI)
-#   sudo make uninstall  vollständig entfernen
-#   make packages        .rpm/.deb/.pkg.tar.zst nach dist/ (benötigt nfpm)
-#   make flatpak         Flatpak-Bundle nach dist/ (benötigt flatpak-builder)
+#   make                 build everything (the GUI needs gtk4 and libadwaita development packages)
+#   sudo make install    install (GUI, CLI)
+#   sudo make uninstall  remove completely
+#   make packages        .rpm/.deb/.pkg.tar.zst into dist/ (needs nfpm)
+#   make flatpak         Flatpak bundle into dist/ (needs flatpak-builder)
 
 VERSION ?= $(shell sh packaging/scripts/version.sh)
 ARCH    ?= $(shell go env GOARCH)

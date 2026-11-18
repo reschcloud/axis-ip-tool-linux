@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
-// axisctl – Kommandozeilenwerkzeug zum Finden und Konfigurieren von Axis-Geräten.
+// axisctl – command line tool for finding and configuring Axis devices.
 package main
 
 import (
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,29 +23,30 @@ import (
 	"axis-ip-tool/internal/axis"
 )
 
-// version wird beim Bauen gesetzt (-ldflags "-X main.version=…", siehe Makefile).
+// version is set at build time (-ldflags "-X main.version=…", see Makefile).
 var version = "dev"
 
-const usage = `axisctl – Axis-Geräte finden und konfigurieren
+const usage = `axisctl – find and configure Axis devices
 
-Aufruf: axisctl [--https-only] BEFEHL …
+Usage: axisctl [--https-only] COMMAND …
 
-Befehle:
-  list     [-t 5s]                                  Geräte im Netz suchen
-  info     <ip>                                     Modell, Firmware, Netzwerk anzeigen
-  init     <ip> [-u root]                           Ersten Admin anlegen (Werkszustand)
-  net      <ip> (-dhcp | -ip A/PRÄFIX [-gw G])
-                [-hostname H] [-dns A,B]            Netzwerk konfigurieren
+Commands:
+  list     [-t 5s]                                  Discover devices on the network
+  info     <ip>                                     Show model, firmware, network
+  init     <ip> [-u root]                           Create the first admin (factory state),
+                [-freq 50] [-mount ceiling]         set power line frequency/mounting position
+  net      <ip> (-dhcp | -ip A/PREFIX [-gw G])
+                [-hostname H] [-dns A,B]            Configure network
   time     <ip> [-tz Europe/Vienna] [-sync=true]
-                [-ntp dhcp|off|SERVER,SERVER]       Zeitzone/Uhrzeit/NTP setzen
-  restart  <ip>                                     Neustart
-  reset    <ip> [-all] [-y]                         Werkseinstellungen (-all: auch IP-Einstellungen)
-  batch    [GERÄT …] [-csv PLAN] …                  Mehrere Geräte konfigurieren (axisctl batch -h)
-  version                                           Version anzeigen
+                [-ntp dhcp|off|SERVER,SERVER]       Set time zone/time/NTP
+  restart  <ip>                                     Reboot
+  reset    <ip> [-all] [-y]                         Factory defaults (-all: IP settings too)
+  batch    [DEVICE …] [-csv PLAN] …                 Configure several devices (axisctl batch -h)
+  version                                           Show version
 
-Anmeldung: -u BENUTZER (Standard root), Passwort aus $AXIS_PASSWORD oder Abfrage.
-Verbindung: HTTPS, wenn das Gerät es anbietet (Zertifikat wird nicht geprüft), sonst HTTP.
-  --https-only bzw. AXIS_HTTPS_ONLY=1 verbietet den Rückfall auf HTTP.
+Login: -u USER (default root), password from $AXIS_PASSWORD or prompt.
+Connection: HTTPS if the device offers it (certificate is not verified), otherwise HTTP.
+  --https-only or AXIS_HTTPS_ONLY=1 forbids the fallback to HTTP.
 `
 
 func main() {
@@ -85,10 +87,10 @@ func main() {
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
-		err = fmt.Errorf("unbekannter Befehl %q", cmd)
+		err = fmt.Errorf("unknown command %q", cmd)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Fehler:", err)
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 }
@@ -97,31 +99,32 @@ func main() {
 
 func cmdList(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
-	t := fs.String("t", "5s", "Suchdauer (z. B. 5 oder 10s)")
+	t := fs.String("t", "5s", "discovery duration (e.g. 5 or 10s)")
 	fs.Parse(args)
 	list, err := discover(ctx, *t)
 	if err != nil {
 		return err
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tHOSTNAME\tIP\tSERIENNUMMER\tMODELL\tFIRMWARE\tVERBINDUNG\tSTATUS")
+	fmt.Fprintln(tw, "MODEL\tSERIAL\tHOSTNAME\tIPV4\tIPV6\tINTERFACE\tFIRMWARE\tPING\tCONNECTION\tSTATUS")
 	for _, d := range list {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", d.Name, d.Hostname, d.IP, d.Serial, d.Model, d.Firmware, d.Connection(), d.Status())
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", d.Model, d.Serial, d.Hostname, d.IP,
+			d.PreferredIPv6(), d.Iface, d.Firmware, d.PingText(), d.Connection(), d.Status())
 	}
 	tw.Flush()
 	if len(list) == 0 {
-		fmt.Fprintln(os.Stderr, "Keine Geräte gefunden.")
+		fmt.Fprintln(os.Stderr, "No devices found.")
 	}
 	return nil
 }
 
-// discover sucht für die Dauer t (z. B. "5" oder "10s") nach Geräten.
+// discover searches for devices for the duration t (e.g. "5" or "10s").
 func discover(ctx context.Context, t string) ([]*axis.Device, error) {
 	var dur time.Duration
 	if n, err := strconv.Atoi(t); err == nil {
 		dur = time.Duration(n) * time.Second
 	} else if dur, err = time.ParseDuration(t); err != nil {
-		return nil, fmt.Errorf("ungültige Suchdauer %q", t)
+		return nil, fmt.Errorf("invalid discovery duration %q", t)
 	}
 	sctx, cancel := context.WithTimeout(ctx, dur)
 	defer cancel()
@@ -131,7 +134,7 @@ func discover(ctx context.Context, t string) ([]*axis.Device, error) {
 		mu.Lock()
 		reg.Update(d)
 		mu.Unlock()
-	}, func(err error) { fmt.Fprintln(os.Stderr, "Hinweis:", err) })
+	}, func(err error) { fmt.Fprintln(os.Stderr, "Note:", err) })
 	<-sctx.Done()
 	time.Sleep(300 * time.Millisecond)
 	mu.Lock()
@@ -150,7 +153,7 @@ func cmdInfo(ctx context.Context, args []string) error {
 	}
 	info, err := axis.NewClient(ip, 80, "", "").BasicInfo(ctx)
 	var c *axis.Client
-	if errors.Is(err, axis.ErrAuth) { // neuere Firmware: nur mit Anmeldung
+	if errors.Is(err, axis.ErrAuth) { // newer firmware: only with login
 		if c, err = login(ctx, ip, *user); err != nil {
 			return err
 		}
@@ -159,14 +162,14 @@ func cmdInfo(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Modell:        %s\nSeriennummer:  %s\nFirmware:      %s\n", info.Model, info.Serial, info.Firmware)
-	conn := "HTTP (unverschlüsselt)"
+	fmt.Printf("Model:         %s\nSerial:        %s\nFirmware:      %s\n", info.Model, info.Serial, info.Firmware)
+	conn := "HTTP (unencrypted)"
 	if axis.NewClient(ip, 80, "", "").Secure(ctx) {
 		conn = "HTTPS"
 	}
-	fmt.Printf("Verbindung:    %s\n", conn)
+	fmt.Printf("Connection:    %s\n", conn)
 	if needs, _ := axis.NewClient(ip, 80, "", "").NeedsInitialUser(ctx); needs {
-		fmt.Println("Status:        Werkszustand, noch kein Passwort gesetzt (axisctl init)")
+		fmt.Println("Status:        factory state, no password set yet (axisctl init)")
 		return nil
 	}
 	if c == nil {
@@ -178,7 +181,7 @@ func cmdInfo(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	mode := "statisch"
+	mode := "static"
 	if n.DHCP {
 		mode = "DHCP"
 	}
@@ -195,36 +198,75 @@ func cmdInfo(ctx context.Context, args []string) error {
 
 func cmdInit(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	user := fs.String("u", "root", "Benutzername des Administrators")
+	user := fs.String("u", "root", "user name of the administrator")
+	freq := fs.Int("freq", 50, "power line frequency in Hz (50, 60; 0 = don't change)")
+	mount := fs.String("mount", "ceiling", "mounting position: ceiling, wall, desk, none")
 	fs.Parse(reorder(args))
 	ip, err := oneArg(fs)
 	if err != nil {
 		return err
 	}
+	setup, err := setupFlags(*freq, *mount)
+	if err != nil {
+		return err
+	}
 	pw := os.Getenv("AXIS_PASSWORD")
 	if pw == "" {
-		if pw, err = readPassword("Neues Passwort: "); err != nil {
+		if pw, err = readPassword("New password: "); err != nil {
 			return err
 		}
-		pw2, err := readPassword("Wiederholen: ")
+		pw2, err := readPassword("Repeat: ")
 		if err != nil {
 			return err
 		}
 		if pw != pw2 {
-			return errors.New("Passwörter stimmen nicht überein")
+			return errors.New("passwords don't match")
 		}
 	}
 	if len(pw) < 8 {
-		return errors.New("Passwort zu kurz (mindestens 8 Zeichen)")
+		return errors.New("password too short (at least 8 characters)")
 	}
 	c := axis.NewClient(ip, 80, "", "")
 	if !c.Secure(ctx) && !axis.HTTPSOnly() {
-		fmt.Fprintln(os.Stderr, "Warnung: Gerät bietet kein HTTPS – das Passwort wird unverschlüsselt übertragen.")
+		fmt.Fprintln(os.Stderr, "Warning: device doesn't offer HTTPS – the password is transmitted unencrypted.")
 	}
 	if err := c.CreateInitialUser(ctx, *user, pw); err != nil {
 		return err
 	}
-	fmt.Printf("Benutzer %q angelegt.\n", *user)
+	fmt.Printf("User %q created.\n", *user)
+	return applySetup(ctx, axis.NewClient(ip, 80, *user, pw), setup)
+}
+
+// setupFlags checks -freq/-mount for commissioning.
+func setupFlags(freq int, mount string) (axis.InitialSetup, error) {
+	m, err := axis.ParseMount(mount)
+	if err != nil {
+		return axis.InitialSetup{}, err
+	}
+	if freq != 0 && freq != 50 && freq != 60 {
+		return axis.InitialSetup{}, errors.New("-freq: 50, 60 or 0 (don't change)")
+	}
+	return axis.InitialSetup{PowerFrequency: freq, Mount: m}, nil
+}
+
+// applySetup sets power line frequency and mounting position and reports what the device doesn't know.
+func applySetup(ctx context.Context, c *axis.Client, s axis.InitialSetup) error {
+	if s.Empty() {
+		return nil
+	}
+	skipped, err := c.ApplyInitialSetup(ctx, s)
+	if err != nil {
+		return fmt.Errorf("power line frequency/mounting position: %w", err)
+	}
+	if s.PowerFrequency != 0 && !slices.Contains(skipped, axis.SettingPowerFrequency) {
+		fmt.Printf("Power line frequency: %d Hz\n", s.PowerFrequency)
+	}
+	if s.Mount != "" && !slices.Contains(skipped, axis.SettingMount) {
+		fmt.Printf("Mounting position: %s\n", axis.MountName(s.Mount))
+	}
+	for _, k := range skipped {
+		fmt.Printf("%s: not supported by the device\n", k)
+	}
 	return nil
 }
 
@@ -232,11 +274,11 @@ func cmdInit(ctx context.Context, args []string) error {
 
 func cmdNet(ctx context.Context, args []string) error {
 	fs, user := authFlags("net")
-	dhcp := fs.Bool("dhcp", false, "IPv4 per DHCP")
-	addr := fs.String("ip", "", "statische Adresse, z. B. 192.168.1.20/24")
-	gw := fs.String("gw", "", "Standard-Gateway")
-	host := fs.String("hostname", "", "statischer Hostname (\"dhcp\" = per DHCP)")
-	dns := fs.String("dns", "", "DNS-Server, kommagetrennt (\"dhcp\" = per DHCP)")
+	dhcp := fs.Bool("dhcp", false, "IPv4 via DHCP")
+	addr := fs.String("ip", "", "static address, e.g. 192.168.1.20/24")
+	gw := fs.String("gw", "", "default gateway")
+	host := fs.String("hostname", "", "static hostname (\"dhcp\" = via DHCP)")
+	dns := fs.String("dns", "", "DNS servers, comma-separated (\"dhcp\" = via DHCP)")
 	fs.Parse(reorder(args))
 	ip, err := oneArg(fs)
 	if err != nil {
@@ -282,7 +324,7 @@ func cmdNet(ctx context.Context, args []string) error {
 	if err := c.SetNetwork(ctx, cfg); err != nil {
 		return err
 	}
-	fmt.Println("Netzwerkeinstellungen übernommen.")
+	fmt.Println("Network settings applied.")
 	return nil
 }
 
@@ -290,9 +332,9 @@ func cmdNet(ctx context.Context, args []string) error {
 
 func cmdTime(ctx context.Context, args []string) error {
 	fs, user := authFlags("time")
-	tz := fs.String("tz", localTZ(), "Zeitzone (IANA)")
-	sync := fs.Bool("sync", true, "Uhrzeit von diesem Rechner übernehmen (ignoriert, wenn NTP aktiv)")
-	ntp := fs.String("ntp", "", "NTP: \"dhcp\", \"off\" oder Server (kommagetrennt)")
+	tz := fs.String("tz", localTZ(), "time zone (IANA)")
+	sync := fs.Bool("sync", true, "take the time from this computer (ignored if NTP is active)")
+	ntp := fs.String("ntp", "", "NTP: \"dhcp\", \"off\" or servers (comma-separated)")
 	fs.Parse(reorder(args))
 	ip, err := oneArg(fs)
 	if err != nil {
@@ -305,7 +347,7 @@ func cmdTime(ctx context.Context, args []string) error {
 	if *ntp != "" {
 		cfg := axis.NTPConfig{Enabled: true}
 		switch strings.ToLower(*ntp) {
-		case "off", "aus":
+		case "off":
 			cfg.Enabled = false
 		case "dhcp":
 			cfg.FromDHCP = true
@@ -323,7 +365,7 @@ func cmdTime(ctx context.Context, args []string) error {
 		}
 		*sync = *sync && !cfg.Enabled
 	} else if t, err := c.GetNTP(ctx); err == nil && t.Enabled {
-		*sync = false // Uhrzeit kommt per NTP
+		*sync = false // time comes via NTP
 	}
 	if err := c.SetTime(ctx, *tz, *sync); err != nil {
 		return err
@@ -331,7 +373,7 @@ func cmdTime(ctx context.Context, args []string) error {
 	if t, err := c.GetNTP(ctx); err == nil {
 		fmt.Println("NTP:", describeNTP(t))
 	}
-	fmt.Println("Datum & Zeit gesetzt.")
+	fmt.Println("Date & time set.")
 	return nil
 }
 
@@ -349,14 +391,14 @@ func cmdRestart(ctx context.Context, args []string) error {
 	if err := c.Restart(ctx); err != nil {
 		return err
 	}
-	fmt.Println("Neustart ausgelöst.")
+	fmt.Println("Reboot triggered.")
 	return nil
 }
 
 func cmdReset(ctx context.Context, args []string) error {
 	fs, user := authFlags("reset")
-	all := fs.Bool("all", false, "auch Netzwerkeinstellungen zurücksetzen (Gerät bekommt neue IP)")
-	yes := fs.Bool("y", false, "ohne Rückfrage")
+	all := fs.Bool("all", false, "reset network settings too (device gets a new IP)")
+	yes := fs.Bool("y", false, "don't ask for confirmation")
 	fs.Parse(reorder(args))
 	ip, err := oneArg(fs)
 	if err != nil {
@@ -366,26 +408,26 @@ func cmdReset(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	what := "Alle Einstellungen, Benutzer und Passwörter (IP-Einstellungen bleiben)"
+	what := "All settings, users and passwords (IP settings are kept)"
 	if *all {
-		what = "Alle Einstellungen, Benutzer, Passwörter UND die IP-Einstellungen"
+		what = "All settings, users, passwords AND the IP settings"
 	}
-	if !*yes && !confirm(fmt.Sprintf("%s auf %s werden gelöscht. Fortfahren? [j/N] ", what, ip)) {
-		return errors.New("abgebrochen")
+	if !*yes && !confirm(fmt.Sprintf("%s on %s will be deleted. Continue? [y/N] ", what, ip)) {
+		return errors.New("cancelled")
 	}
 	if err := c.FactoryReset(ctx, !*all); err != nil {
 		return err
 	}
-	fmt.Println("Werkseinstellungen werden geladen, das Gerät startet neu (ca. 1–2 Minuten).")
+	fmt.Println("Loading factory defaults, the device reboots (about 1–2 minutes).")
 	return nil
 }
 
 func authFlags(name string) (*flag.FlagSet, *string) {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
-	return fs, fs.String("u", "root", "Benutzername")
+	return fs, fs.String("u", "root", "user name")
 }
 
-// reorder erlaubt Flags auch nach der IP („axisctl net 1.2.3.4 -dhcp“).
+// reorder allows flags after the IP too ("axisctl net 1.2.3.4 -dhcp").
 func reorder(args []string) []string {
 	var flags, pos []string
 	for i := 0; i < len(args); i++ {
@@ -415,7 +457,7 @@ func isBoolFlag(a string) bool {
 
 func oneArg(fs *flag.FlagSet) (string, error) {
 	if fs.NArg() != 1 {
-		return "", errors.New("genau eine IP-Adresse angeben")
+		return "", errors.New("specify exactly one IP address")
 	}
 	return fs.Arg(0), nil
 }
@@ -424,7 +466,7 @@ func login(ctx context.Context, ip, user string) (*axis.Client, error) {
 	pw := os.Getenv("AXIS_PASSWORD")
 	if pw == "" {
 		var err error
-		if pw, err = readPassword(fmt.Sprintf("Passwort für %s@%s: ", user, ip)); err != nil {
+		if pw, err = readPassword(fmt.Sprintf("Password for %s@%s: ", user, ip)); err != nil {
 			return nil, err
 		}
 	}
@@ -441,7 +483,7 @@ func localTZ() string {
 	return ""
 }
 
-// readPassword liest ohne Echo vom Terminal (ohne externe Abhängigkeit).
+// readPassword reads from the terminal without echo (no external dependency).
 func readPassword(prompt string) (string, error) {
 	fmt.Fprint(os.Stderr, prompt)
 	fd := os.Stdin.Fd()
@@ -469,17 +511,17 @@ func ioctl(fd uintptr, req uintptr, t *syscall.Termios) error {
 
 func describeNTP(t axis.NTPConfig) string {
 	if !t.Enabled {
-		return "aus"
+		return "off"
 	}
 	s := strings.Join(t.Servers, ", ")
 	if t.FromDHCP {
-		s = "per DHCP"
+		s = "via DHCP"
 	}
 	if len(t.Active) > 0 {
-		s += " (aktiv: " + strings.Join(t.Active, ", ") + ")"
+		s += " (active: " + strings.Join(t.Active, ", ") + ")"
 	}
 	if t.Synced != nil && *t.Synced {
-		s += ", synchronisiert"
+		s += ", synchronized"
 	}
 	return s
 }

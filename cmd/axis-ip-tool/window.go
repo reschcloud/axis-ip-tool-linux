@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package main
 
@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 	"unsafe"
@@ -33,19 +35,23 @@ type column struct {
 }
 
 var columns = []column{
-	{"Name", true, func(d *axis.Device) string { return d.Name }, nil},
+	{"Model", true, func(d *axis.Device) string { return d.Model }, nil},
+	{"Serial number", false, func(d *axis.Device) string { return d.Serial }, nil},
 	{"Hostname", false, func(d *axis.Device) string { return d.Hostname }, nil},
-	{"IP-Adresse", false, func(d *axis.Device) string { return d.IP }, func(a, b *axis.Device) bool { return axis.IPLess(a.IP, b.IP) }},
-	{"Seriennummer", false, func(d *axis.Device) string { return d.Serial }, nil},
-	{"Modell", true, func(d *axis.Device) string { return d.Model }, nil},
+	{"IPv4 address", false, func(d *axis.Device) string { return d.IP }, func(a, b *axis.Device) bool { return axis.IPLess(a.IP, b.IP) }},
+	{"IPv6 address", false, func(d *axis.Device) string { return d.PreferredIPv6() }, nil},
+	{"Interface", false, func(d *axis.Device) string { return d.Iface }, nil},
 	{"Firmware", false, func(d *axis.Device) string { return d.Firmware }, nil},
-	{"Verbindung", false, func(d *axis.Device) string { return d.Connection() }, nil},
+	{"Ping", false, func(d *axis.Device) string { return d.PingText() }, nil},
+	{"Connection", false, func(d *axis.Device) string { return d.Connection() }, nil},
 	{"Status", false, func(d *axis.Device) string { return d.Status() }, nil},
 }
 
 // Indizes besonderer Spalten in columns
 var (
-	ipColumn     = 2
+	ipColumn     = 3
+	ipv6Column   = 4
+	pingColumn   = len(columns) - 3
 	connColumn   = len(columns) - 2
 	statusColumn = len(columns) - 1
 )
@@ -54,11 +60,13 @@ type window struct {
 	*adw.ApplicationWindow
 	app *adw.Application
 
-	reg        *axis.Registry // nur im GTK-Thread verwenden
+	reg        *axis.Registry // use in the GTK thread only
 	creds      map[string][2]string
-	lastUser   string                  // zuletzt eingegebener Benutzername (Vorbelegung)
-	lastForAll bool                    // „auch bei allen anderen“ zuletzt gewählt
-	cells      map[string][]*gtk.Label // gebundene Zellen je Gerät, für Live-Updates
+	fwd        *axis.Forwarder         // local forwardings to link-local IPv6 addresses
+	infoAt     map[string]time.Time    // last query with login (refreshInfo)
+	lastUser   string                  // user name entered last (preset)
+	lastForAll bool                    // "for all others too" chosen last
+	cells      map[string][]*gtk.Label // bound cells per device, for live updates
 
 	keys      *gtk.StringList
 	filter    *gtk.CustomFilter
@@ -69,8 +77,10 @@ type window struct {
 	buttons   map[string]*gtk.Button
 
 	cancelScan  context.CancelFunc
-	infoPending map[string]bool         // laufende Anmeldeprüfungen (Statusspalte zeigt Spinner)
-	spin        map[string]*gtk.Spinner // Spinner der Statuszelle je Gerät
+	infoPending map[string]bool         // running login checks (status column shows a spinner)
+	infoRunning map[string]bool         // running refreshInfo queries (silent ones too)
+	live        *gtk.Box                // "Discovery running" indicator in the header bar
+	spin        map[string]*gtk.Spinner // spinner of the status cell per device
 	statusParts map[uintptr]statusPart  // Statuszellen-Box → Inhalt
 }
 
@@ -83,11 +93,15 @@ func newWindow(app *adw.Application) *window {
 		cells:             map[string][]*gtk.Label{},
 		buttons:           map[string]*gtk.Button{},
 		infoPending:       map[string]bool{},
+		infoRunning:       map[string]bool{},
 		spin:              map[string]*gtk.Spinner{},
 		statusParts:       map[uintptr]statusPart{},
+		fwd:               axis.NewForwarder(),
+		infoAt:            map[string]time.Time{},
 	}
 	w.SetTitle("Axis IP Tool")
-	w.SetDefaultSize(1100, 640)
+	w.SetDefaultSize(1400, 640)
+	glib.TimeoutAdd(1000, func() bool { w.tick(); return true })
 	w.build()
 	w.ConnectCloseRequest(func() bool {
 		if w.cancelScan != nil {
@@ -99,19 +113,31 @@ func newWindow(app *adw.Application) *window {
 	return w
 }
 
-// ---------------------------------------------------------------- Aufbau
+// ---------------------------------------------------------------- Layout
 
 func (w *window) build() {
 	tv := adw.NewToolbarView()
 	hb := adw.NewHeaderBar()
 
 	refresh := gtk.NewButtonFromIconName("view-refresh-symbolic")
-	refresh.SetTooltipText("Neu suchen (F5)")
+	refresh.SetTooltipText("Search again (F5)")
 	refresh.SetActionName("win.rescan")
 	hb.PackStart(refresh)
 
+	// indicator: discovery keeps running in the background
+	live := gtk.NewBox(gtk.OrientationHorizontal, 6)
+	liveSpin := gtk.NewSpinner()
+	liveSpin.Start()
+	liveLabel := gtk.NewLabel("Discovery running")
+	liveLabel.AddCSSClass("dim-label")
+	live.Append(liveSpin)
+	live.Append(liveLabel)
+	w.live = live
+	w.updateLive()
+	hb.PackStart(live)
+
 	w.search = gtk.NewSearchEntry()
-	w.search.SetPlaceholderText("Filtern nach Name, IP, Seriennummer …")
+	w.search.SetPlaceholderText("Filter by model, serial number, hostname, IP …")
 	w.search.SetHExpand(true)
 	w.search.SetMaxWidthChars(48)
 	w.search.ConnectSearchChanged(func() { w.filter.Changed(gtk.FilterChangeDifferent) })
@@ -121,9 +147,9 @@ func (w *window) build() {
 	hb.SetTitleWidget(clamp)
 
 	menu := gio.NewMenu()
-	menu.Append("Nur HTTPS verwenden", "win.https-only")
-	menu.Append("Gespeicherte Anmeldedaten vergessen", "win.forget")
-	menu.Append("Über Axis IP Tool", "app.about")
+	menu.Append("Use HTTPS only", "win.https-only")
+	menu.Append("Forget stored credentials", "win.forget")
+	menu.Append("About Axis IP Tool", "app.about")
 	mb := gtk.NewMenuButton()
 	mb.SetIconName("open-menu-symbolic")
 	mb.SetMenuModel(menu)
@@ -131,7 +157,7 @@ func (w *window) build() {
 	hb.PackEnd(mb)
 	tv.AddTopBar(hb)
 
-	// Tabelle
+	// table
 	w.keys = gtk.NewStringList(nil)
 	w.filter = gtk.NewCustomFilter(w.matches)
 	filtered := gtk.NewFilterListModel(w.keys, &w.filter.Filter)
@@ -152,7 +178,7 @@ func (w *window) build() {
 	for i, c := range columns {
 		col := w.makeColumn(i, c)
 		cv.AppendColumn(col)
-		if i == 1 {
+		if i == ipColumn {
 			ipCol = col
 		}
 	}
@@ -164,14 +190,14 @@ func (w *window) build() {
 
 	empty := adw.NewStatusPage()
 	empty.SetIconName("camera-web-symbolic")
-	empty.SetTitle("Suche nach Axis-Geräten …")
-	empty.SetDescription("Geräte im lokalen Netz werden per Bonjour/mDNS und SSDP gefunden.")
+	empty.SetTitle("Searching for Axis devices …")
+	empty.SetDescription("Devices on the local network are found via Bonjour/mDNS and SSDP.")
 
 	w.stack = gtk.NewStack()
 	w.stack.AddNamed(empty, "empty")
 	w.stack.AddNamed(scroller, "list")
 
-	// Aktionsleiste
+	// action bar
 	bar := gtk.NewActionBar()
 	type btn struct {
 		key, label, icon string
@@ -179,14 +205,14 @@ func (w *window) build() {
 		cb               func()
 	}
 	for _, b := range []btn{
-		{"browser", "Webseite öffnen", "web-browser-symbolic", false, w.onBrowser},
-		{"preview", "Vorschau", "camera-photo-symbolic", false, w.onPreview},
-		{"password", "Passwort setzen", "dialog-password-symbolic", false, w.onPassword},
-		{"network", "Netzwerk", "network-wired-symbolic", false, w.onNetwork},
-		{"time", "Datum & Zeit", "preferences-system-time-symbolic", false, w.onTime},
-		{"restart", "Neustart", "system-reboot-symbolic", true, w.onRestart},
-		{"reset", "Zurücksetzen", "edit-undo-symbolic", true, w.onReset},
-		{"batch", "Mehrere konfigurieren", "view-list-bullet-symbolic", true, w.onBatch},
+		{"browser", "Open website", "web-browser-symbolic", false, w.onBrowser},
+		{"preview", "Preview", "camera-photo-symbolic", false, w.onPreview},
+		{"password", "Set password", "dialog-password-symbolic", false, w.onPassword},
+		{"network", "Network", "network-wired-symbolic", false, w.onNetwork},
+		{"time", "Date & time", "preferences-system-time-symbolic", false, w.onTime},
+		{"restart", "Restart", "system-reboot-symbolic", true, w.onRestart},
+		{"reset", "Reset", "edit-undo-symbolic", true, w.onReset},
+		{"batch", "Configure multiple", "view-list-bullet-symbolic", true, w.onBatch},
 	} {
 		content := adw.NewButtonContent()
 		content.SetLabel(b.label)
@@ -204,7 +230,7 @@ func (w *window) build() {
 	}
 	w.buttons["restart"].AddCSSClass("destructive-action")
 	w.buttons["reset"].AddCSSClass("destructive-action")
-	w.buttons["reset"].SetTooltipText("Auf Werkseinstellungen zurücksetzen")
+	w.buttons["reset"].SetTooltipText("Reset to factory defaults")
 
 	tv.SetContent(w.stack)
 	tv.AddBottomBar(bar)
@@ -215,7 +241,7 @@ func (w *window) build() {
 	for name, cb := range map[string]func(){
 		"rescan": w.rescan,
 		"search": func() { w.search.GrabFocus() },
-		"forget": func() { w.creds = map[string][2]string{}; w.toast("Anmeldedaten vergessen") },
+		"forget": func() { w.creds = map[string][2]string{}; w.toast("Credentials forgotten") },
 	} {
 		a := gio.NewSimpleAction(name, nil)
 		cb := cb
@@ -227,13 +253,13 @@ func (w *window) build() {
 		on := !axis.HTTPSOnly()
 		axis.SetHTTPSOnly(on)
 		httpsOnly.SetState(glib.NewVariantBoolean(on))
-		if err := saveSettings(settings{HTTPSOnly: on}); err != nil {
-			w.toast("Einstellung nicht gespeichert: " + err.Error())
+		if err := updateSettings(func(s *settings) { s.HTTPSOnly = on }); err != nil {
+			w.toast("Setting not saved: " + err.Error())
 		}
 		if on {
-			w.toast("Nur noch verschlüsselte Verbindungen (HTTPS)")
+			w.toast("Encrypted connections (HTTPS) only")
 		} else {
-			w.toast("HTTP ist wieder erlaubt, wenn ein Gerät kein HTTPS anbietet")
+			w.toast("HTTP is allowed again if a device doesn't offer HTTPS")
 		}
 		w.rescan()
 	})
@@ -241,7 +267,7 @@ func (w *window) build() {
 	w.updateActions()
 }
 
-// listCell deckt GtkListItem und GtkColumnViewCell ab.
+// listCell covers GtkListItem and GtkColumnViewCell.
 type listCell interface {
 	Item() *coreglib.Object
 	Child() gtk.Widgetter
@@ -255,14 +281,27 @@ func (w *window) makeColumn(idx int, c column) *gtk.ColumnViewColumn {
 		l.SetXAlign(0)
 		l.SetEllipsize(pango.EllipsizeEnd)
 		if idx == ipColumn {
-			// Doppelklick auf die IP öffnet die Weboberfläche (statt des Netzwerk-Dialogs)
-			l.SetTooltipText("Doppelklick öffnet die Weboberfläche")
+			// double-click on the IP opens the web interface (instead of the network dialog)
+			l.SetTooltipText("Double-click opens the web interface")
 			click := gtk.NewGestureClick()
 			click.ConnectPressed(func(n int, _, _ float64) {
 				if n == 2 {
 					click.SetState(gtk.EventSequenceClaimed)
 					if d := w.reg.Get(w.keyOfLabel(idx, l)); d != nil && d.IP != "" {
 						gtk.NewURILauncher(d.WebURL()).Launch(context.Background(), &w.Window, nil)
+					}
+				}
+			})
+			l.AddController(click)
+		}
+		if idx == ipv6Column {
+			l.SetTooltipText("Double-click opens the web interface via IPv6")
+			click := gtk.NewGestureClick()
+			click.ConnectPressed(func(n int, _, _ float64) {
+				if n == 2 {
+					click.SetState(gtk.EventSequenceClaimed)
+					if d := w.reg.Get(w.keyOfLabel(idx, l)); d != nil {
+						w.openIPv6(d)
 					}
 				}
 			})
@@ -279,7 +318,7 @@ func (w *window) makeColumn(idx int, c column) *gtk.ColumnViewColumn {
 			}
 		})
 		l.AddController(click)
-		// Statuszelle: Spinner (während Abfrage/Anmeldung) + Text
+		// status cell: spinner (during query/login) + text
 		sp := gtk.NewSpinner()
 		sp.SetVisible(false)
 		box := gtk.NewBox(gtk.OrientationHorizontal, 6)
@@ -361,7 +400,7 @@ func keyOf(p unsafe.Pointer) string {
 	return coreglib.Take(p).Cast().(*gtk.StringObject).String()
 }
 
-// keyOfLabel liefert den Geräteschlüssel zur (gebundenen) Zelle l der Spalte idx.
+// keyOfLabel returns the device key for the (bound) cell l of column idx.
 func (w *window) keyOfLabel(idx int, l *gtk.Label) string {
 	native := coreglib.InternObject(l).Native()
 	for key, cells := range w.cells {
@@ -377,12 +416,12 @@ type statusPart struct {
 	sp *gtk.Spinner
 }
 
-// busy: für das Gerät läuft gerade eine Abfrage, deren Ergebnis den Status ändern kann.
+// busy: a query is running for the device whose result may change the status.
 func (w *window) busy(key string, d *axis.Device) bool {
 	return d.Online && (!d.Enriched || w.infoPending[key])
 }
 
-// rerender aktualisiert alle sichtbaren Zellen des Geräts.
+// rerender updates all visible cells of the device.
 func (w *window) rerender(key string) {
 	dev := w.reg.Get(key)
 	if dev == nil {
@@ -397,16 +436,35 @@ func (w *window) rerender(key string) {
 
 func (w *window) render(key string, l *gtk.Label, idx int, d *axis.Device) {
 	l.SetText(columns[idx].text(d))
+	if idx == pingColumn {
+		l.RemoveCSSClass("warning")
+		l.SetTooltipText("")
+		if !d.PingAt.IsZero() {
+			l.SetTooltipText("Last ping: " + d.PingAt.Format("15:04:05") + " (every second)")
+			if d.Ping < 0 {
+				l.AddCSSClass("warning")
+			}
+		}
+		return
+	}
+	if idx == ipv6Column {
+		tip := "Double-click opens the web interface via IPv6"
+		if len(d.IPv6) > 1 {
+			tip = "All IPv6 addresses:\n" + strings.Join(d.IPv6, "\n") + "\n\n" + tip
+		}
+		l.SetTooltipText(tip)
+		return
+	}
 	if idx == connColumn {
 		l.RemoveCSSClass("warning")
 		l.SetTooltipText("")
 		switch d.Connection() {
 		case "HTTPS":
 			l.SetText("🔒 HTTPS")
-			l.SetTooltipText("Verschlüsselt (Zertifikat wird nicht geprüft)")
+			l.SetTooltipText("Encrypted (certificate is not verified)")
 		case "HTTP":
 			l.AddCSSClass("warning")
-			l.SetTooltipText("Unverschlüsselt – Gerät bietet kein HTTPS an")
+			l.SetTooltipText("Unencrypted – device doesn't offer HTTPS")
 		}
 		return
 	}
@@ -431,40 +489,40 @@ func (w *window) render(key string, l *gtk.Label, idx int, d *axis.Device) {
 	case busy:
 		l.AddCSSClass("dim-label")
 		if w.infoPending[key] {
-			l.SetText("Anmeldung wird geprüft …")
+			l.SetText("Checking login …")
 		} else {
-			l.SetText("Wird abgefragt …")
+			l.SetText("Querying …")
 		}
 	case !d.Online:
 		l.AddCSSClass("dim-label")
 	case d.AuthFailed:
 		l.AddCSSClass("error")
-		l.SetText("🔑 Passwort falsch")
-		l.SetTooltipText("Benutzername oder Passwort abgelehnt (oder keine Admin-Rechte) – klicken zum erneuten Anmelden")
+		l.SetText("🔑 " + axis.StatusAuthFailed)
+		l.SetTooltipText("User name or password rejected (or no admin rights) – click to log in again")
 		l.SetCursorFromName("pointer")
-	case d.Status() == "Angemeldet":
+	case d.Status() == axis.StatusLoggedIn:
 		l.AddCSSClass("success")
-		l.SetText("✓ Angemeldet")
-		l.SetTooltipText("Zugangsdaten geprüft")
-	case d.Status() == "Nicht angemeldet":
-		l.SetText("🔑 Nicht angemeldet")
-		tip := "Gerät ist eingerichtet, Passwort noch nicht eingegeben – klicken zum Anmelden"
+		l.SetText("✓ " + axis.StatusLoggedIn)
+		l.SetTooltipText("Credentials verified")
+	case d.Status() == axis.StatusNotLoggedIn:
+		l.SetText("🔑 " + axis.StatusNotLoggedIn)
+		tip := "Device is set up, password not entered yet – click to log in"
 		if d.IsLocked() {
-			tip += "\nDas Gerät zeigt Firmware und genaues Modell erst nach der Anmeldung."
+			tip += "\nThe device only shows firmware and exact model after login."
 		}
 		l.SetTooltipText(tip)
 		l.SetCursorFromName("pointer")
 	case d.NeedsSetup != nil && *d.NeedsSetup:
 		l.AddCSSClass("warning")
-		l.SetTooltipText("Klicken, um den ersten Administrator anzulegen")
+		l.SetTooltipText("Click to create the first administrator")
 		l.SetCursorFromName("pointer")
 	default:
 		l.AddCSSClass("warning")
 	}
 }
 
-// onStatusClicked: Klick auf „Nicht angemeldet“/„Passwort falsch“ meldet an, auf
-// „Kein Passwort gesetzt“ richtet ein.
+// onStatusClicked: a click on "Not logged in"/"Wrong password" logs in, on
+// "No password set" sets up.
 func (w *window) onStatusClicked(l *gtk.Label) {
 	native := coreglib.InternObject(l).Native()
 	for key, cells := range w.cells {
@@ -474,7 +532,7 @@ func (w *window) onStatusClicked(l *gtk.Label) {
 		d := w.reg.Get(key)
 		switch {
 		case d == nil || !d.Online:
-		case d.AuthFailed || d.Status() == "Nicht angemeldet":
+		case d.AuthFailed || d.Status() == axis.StatusNotLoggedIn:
 			w.unlock(d)
 		case d.NeedsSetup != nil && *d.NeedsSetup:
 			w.selectKey(key)
@@ -484,7 +542,7 @@ func (w *window) onStatusClicked(l *gtk.Label) {
 	}
 }
 
-// selectKey wählt das Gerät key in der Tabelle aus.
+// selectKey selects the device key in the table.
 func (w *window) selectKey(key string) {
 	for i := uint(0); i < w.selection.NItems(); i++ {
 		if w.selection.Item(i).Cast().(*gtk.StringObject).String() == key {
@@ -494,17 +552,17 @@ func (w *window) selectKey(key string) {
 	}
 }
 
-// unlock fragt Zugangsdaten ab und liest damit die gesperrten Geräteinfos.
+// unlock asks for credentials and reads the locked device info with them.
 func (w *window) unlock(d *axis.Device) {
 	key := d.Key()
 	w.selectKey(key)
-	withLogin(w, d, "Anmelden", func(ctx context.Context, c *axis.Client) (axis.Device, error) {
+	withLogin(w, d, "Log in", func(ctx context.Context, c *axis.Client) (axis.Device, error) {
 		return loginInfo(ctx, c)
 	}, func(info axis.Device) {
 		if dev := w.reg.Get(key); dev != nil {
 			w.onDevice(context.Background(), asUpdate(info, dev))
 		}
-		w.toast(label(d) + ": angemeldet")
+		w.toast(label(d) + ": logged in")
 	})
 }
 
@@ -517,7 +575,7 @@ func (w *window) matches(obj *coreglib.Object) bool {
 	if d == nil {
 		return false
 	}
-	for _, s := range []string{d.Name, d.Hostname, d.IP, d.Serial, d.Model, d.Firmware} {
+	for _, s := range []string{d.Model, d.Serial, d.Hostname, d.IP, d.PreferredIPv6(), d.Iface, d.Firmware, d.Name} {
 		if strings.Contains(strings.ToLower(s), q) {
 			return true
 		}
@@ -531,7 +589,7 @@ func (w *window) toast(msg string) {
 	w.toasts.AddToast(t)
 }
 
-// selected liefert das ausgewählte Gerät, wenn genau eines ausgewählt ist.
+// selected returns the selected device if exactly one is selected.
 func (w *window) selected() *axis.Device {
 	if devs := w.selectedDevices(); len(devs) == 1 {
 		return devs[0]
@@ -539,7 +597,7 @@ func (w *window) selected() *axis.Device {
 	return nil
 }
 
-// selectedDevices liefert alle ausgewählten Geräte in Anzeigereihenfolge.
+// selectedDevices returns all selected devices in display order.
 func (w *window) selectedDevices() []*axis.Device {
 	set := w.selection.Selection()
 	var out []*axis.Device
@@ -576,11 +634,11 @@ func (w *window) updateActions() {
 	n := w.keys.NItems()
 	switch n {
 	case 0:
-		w.search.SetPlaceholderText("Filtern nach Name, IP, Seriennummer …")
+		w.search.SetPlaceholderText("Filter by model, serial number, hostname, IP …")
 	case 1:
-		w.search.SetPlaceholderText("1 Gerät – filtern …")
+		w.search.SetPlaceholderText("1 device – filter …")
 	default:
-		w.search.SetPlaceholderText(fmt.Sprintf("%d Geräte – filtern nach Name, IP, Seriennummer …", n))
+		w.search.SetPlaceholderText(fmt.Sprintf("%d devices – filter by model, serial number, IP …", n))
 	}
 	if n > 0 {
 		w.stack.SetVisibleChildName("list")
@@ -589,7 +647,7 @@ func (w *window) updateActions() {
 	}
 }
 
-// ---------------------------------------------------------------- Suche
+// ---------------------------------------------------------------- Discovery
 
 func (w *window) rescan() {
 	if w.cancelScan != nil {
@@ -612,9 +670,18 @@ func (w *window) onDevice(ctx context.Context, d axis.Device) {
 	if ctx.Err() != nil {
 		return // Ergebnis eines alten Suchlaufs
 	}
+	var wasOnline bool
+	if old := w.reg.Get(d.Key()); old != nil {
+		wasOnline = old.Online
+	}
 	ch := w.reg.Update(d)
 	key := ch.Key
 	if key == "" {
+		return
+	}
+	if dev := w.reg.Get(key); !ch.Added && ch.Removed == "" && dev != nil && dev.Online == wasOnline &&
+		!d.PingAt.IsZero() {
+		w.rerender(key) // pure ping result: don't refilter the list (every second per device)
 		return
 	}
 	switch {
@@ -631,18 +698,27 @@ func (w *window) onDevice(ctx context.Context, d axis.Device) {
 	w.refreshInfo(key)
 }
 
-// refreshInfo liest Modell und Firmware mit Anmeldung nach, wenn das Gerät sie
-// anonym nicht herausgibt (AXIS OS 11/12 nach Einrichtung) und Zugangsdaten bekannt sind.
+// refreshInfo reads model and firmware with login if the device doesn't reveal them
+// anonymously (AXIS OS 11/12 after setup) and credentials are known.
 func (w *window) refreshInfo(key string) {
 	d := w.reg.Get(key)
 	c, ok := w.creds[key]
-	// Erst nach der Abfrage durch die Suche: Die Kameras melden sich oft zuerst mit der
-	// Link-Local-Adresse, die richtige Adresse folgt Sekundenbruchteile später.
-	if !ok || d == nil || d.Unlocked || d.IP == "" || !d.Online || !d.Enriched || w.infoPending[key] {
+	// Only after the query by the discovery: cameras often report their link-local address
+	// first, the real address follows fractions of a second later.
+	// Afterwards repeated in the background every axis.CheckInterval (password changed? new firmware?)
+	fresh := time.Since(w.infoAt[key]) < axis.CheckInterval
+	if !ok || d == nil || fresh || d.IP == "" || !d.Online || !d.Enriched || w.infoPending[key] || w.infoRunning[key] {
 		return
 	}
-	w.infoPending[key] = true
-	w.rerender(key)
+	w.infoAt[key] = time.Now()
+	w.infoRunning[key] = true
+	// spinner only on the first check – the background repetition runs silently
+	// so the status doesn't keep changing briefly.
+	quiet := d.Unlocked
+	if !quiet {
+		w.infoPending[key] = true
+		w.rerender(key)
+	}
 	ip, port, reg := d.IP, d.Port, w.reg
 	async(func() (axis.Device, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -651,13 +727,15 @@ func (w *window) refreshInfo(key string) {
 		return loginInfo(ctx, cl)
 	}, func(info axis.Device) {
 		delete(w.infoPending, key)
+		delete(w.infoRunning, key)
 		dev := reg.Get(key)
 		if reg != w.reg || dev == nil {
-			return // inzwischen neu gesucht
+			return // searched again in the meantime
 		}
 		w.onDevice(context.Background(), asUpdate(info, dev))
 	}, func(err error) {
 		delete(w.infoPending, key)
+		delete(w.infoRunning, key)
 		if reg != w.reg {
 			return
 		}
@@ -667,12 +745,12 @@ func (w *window) refreshInfo(key string) {
 		}
 		w.rerender(key)
 		if dev := reg.Get(key); dev != nil && dev.IP != ip {
-			w.refreshInfo(key) // Adresse hat sich inzwischen geändert → dort noch einmal
+			w.refreshInfo(key) // address changed in the meantime → once more there
 		}
 	})
 }
 
-// setAuth vermerkt, ob die Zugangsdaten für key gültig sind (Statusspalte).
+// setAuth records whether the credentials for key are valid (status column).
 func (w *window) setAuth(key string, ok bool) {
 	dev := w.reg.Get(key)
 	if dev == nil {
@@ -688,7 +766,7 @@ func (w *window) setAuth(key string, ok bool) {
 	w.onDevice(context.Background(), u)
 }
 
-// replaceKey ersetzt old in der Liste durch key oder entfernt es (key == "").
+// replaceKey replaces old in the list with key or removes it (key == "").
 func (w *window) replaceKey(old, key string) {
 	for i := uint(0); i < w.keys.NItems(); i++ {
 		if w.keys.String(i) == old {
@@ -700,4 +778,63 @@ func (w *window) replaceKey(old, key string) {
 			return
 		}
 	}
+}
+
+// openIPv6 opens the web interface via IPv6. Link-local addresses need the interface
+// (zone), which browsers don't support in URLs – hence via a local forwarding.
+func (w *window) openIPv6(d *axis.Device) {
+	scheme, host, port := d.WebTargetIPv6()
+	if host == "" {
+		return
+	}
+	var uri string
+	if strings.Contains(host, "%") {
+		local, err := w.fwd.Local(host, port)
+		if err != nil {
+			w.toast("Forwarding not possible: " + err.Error())
+			return
+		}
+		uri = scheme + "://" + local + "/"
+		w.toast(fmt.Sprintf("Web interface via %s (interface %s), forwarded locally", d.PreferredIPv6(), d.Iface))
+	} else {
+		uri = scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/"
+	}
+	gtk.NewURILauncher(uri).Launch(context.Background(), &w.Window, nil)
+}
+
+// tick runs every second: devices without a sign of life for axis.MaxAge go offline,
+// information requiring login is refreshed.
+func (w *window) tick() {
+	expired := w.reg.Expire(time.Now(), axis.MaxAge)
+	for _, key := range expired {
+		w.rerender(key)
+	}
+	if len(expired) > 0 {
+		w.filter.Changed(gtk.FilterChangeDifferent)
+		w.updateActions()
+	}
+	for key := range w.creds {
+		w.refreshInfo(key)
+	}
+	w.updateLive()
+}
+
+// updateLive shows in the tooltip of the discovery indicator when a device answered last.
+func (w *window) updateLive() {
+	if w.live == nil {
+		return
+	}
+	tip := fmt.Sprintf("Devices are monitored continuously: ping every second, "+
+		"query every %d s. Without a reply for %d s a device is considered offline.",
+		int(axis.CheckInterval.Seconds()), int(axis.MaxAge.Seconds()))
+	var last time.Time
+	for _, d := range w.reg.All() {
+		if d.LastSeen.After(last) {
+			last = d.LastSeen
+		}
+	}
+	if !last.IsZero() {
+		tip += "\nLast reply: " + last.Format("15:04:05")
+	}
+	w.live.SetTooltipText(tip)
 }

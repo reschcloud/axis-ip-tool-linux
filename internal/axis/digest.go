@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package axis
 
@@ -12,11 +12,11 @@ import (
 	"strings"
 )
 
-// HTTP-Digest-Authentifizierung (RFC 7616), wie sie Axis-Geräte verwenden.
-// Die Go-Standardbibliothek bringt dafür nichts mit.
+// HTTP digest authentication (RFC 7616) as used by Axis devices.
+// The Go standard library has nothing for it.
 
 type challenge struct {
-	scheme    string // "digest" oder "basic"
+	scheme    string // "digest" or "basic"
 	realm     string
 	nonce     string
 	opaque    string
@@ -25,7 +25,7 @@ type challenge struct {
 	nc        int
 }
 
-// parseChallenges liest alle WWW-Authenticate-Header und bevorzugt Digest (SHA-256 vor MD5).
+// parseChallenges reads all WWW-Authenticate headers and prefers digest (SHA-256 before MD5).
 func parseChallenges(headers []string) *challenge {
 	var best *challenge
 	for _, h := range headers {
@@ -85,7 +85,7 @@ func parseParams(s string) map[string]string {
 
 func (c *challenge) authorization(method, uri, user, pass string) string {
 	if c.scheme == "basic" {
-		return "" // wird vom Aufrufer über SetBasicAuth erledigt
+		return "" // handled by the caller via SetBasicAuth
 	}
 	var newHash func() hash.Hash = md5.New
 	alg := c.algorithm
