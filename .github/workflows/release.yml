@@ -26,13 +26,17 @@ jobs:
     # Oldest supported Ubuntu = oldest glibc → binaries also run on Fedora and Arch.
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # tags for packaging/scripts/version.sh
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          # Latest stable Go, not the minimum from go.mod: the minimum (1.24.0) has known
+          # vulnerabilities in the standard library (net/http …) that govulncheck reports,
+          # and release binaries should contain the patched standard library.
+          go-version: stable
+          check-latest: true
           cache: true # otherwise the GTK bindings (cgo) take 10–15 min on every run
 
       - name: Build dependencies
@@ -92,7 +96,7 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
       options: --privileged
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: io.github.reschcloud.AxisIpTool.${{ matrix.arch }}.flatpak
@@ -108,7 +112,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           path: artifacts

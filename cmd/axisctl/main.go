@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,6 +43,9 @@ Commands:
   restart  <ip>                                     Reboot
   reset    <ip> [-all] [-y]                         Factory defaults (-all: IP settings too)
   batch    [DEVICE …] [-csv PLAN] …                 Configure several devices (axisctl batch -h)
+  firmware <ip> [-version V | -file F.bin]          Compare with axis.com / update firmware
+                [-factory none|soft|hard] [-y]      (axisctl firmware -h)
+  ptz      <ip> [-zoom in|out] [-af] [-calibrate]   Show PTZ/lens capabilities, test zoom/AF/calibration
   version                                           Show version
 
 Login: -u USER (default root), password from $AXIS_PASSWORD or prompt.
@@ -50,6 +54,7 @@ Connection: HTTPS if the device offers it (certificate is not verified), otherwi
 `
 
 func main() {
+	axis.UserAgent = "axisctl/" + version + " (axis-ip-tool)"
 	if v := os.Getenv("AXIS_HTTPS_ONLY"); v == "1" || v == "true" || v == "yes" {
 		axis.SetHTTPSOnly(true)
 	}
@@ -82,6 +87,10 @@ func main() {
 		err = cmdReset(ctx, args)
 	case "batch":
 		err = cmdBatch(ctx, args)
+	case "ptz":
+		err = cmdPTZ(ctx, args)
+	case "firmware", "fw":
+		err = cmdFirmware(ctx, args)
 	case "version", "--version":
 		fmt.Println("axisctl", version)
 	case "-h", "--help", "help":
@@ -377,6 +386,265 @@ func cmdTime(ctx context.Context, args []string) error {
 	return nil
 }
 
+func cmdFirmware(ctx context.Context, args []string) error {
+	fs, user := authFlags("firmware")
+	fs.Usage = func() {
+		fmt.Fprint(os.Stderr, `Usage: axisctl firmware <ip> [options]
+
+Without -version/-file: shows the installed firmware and the versions on axis.com.
+Downloading from axis.com needs a My Axis sign-in: sign in once in the GUI
+(Firmware update → Sign in) or set $AXIS_MYAXIS_SESSION to the value of the
+axis_connect_session_sid cookie of www.axis.com.
+
+`)
+		fs.PrintDefaults()
+	}
+	version := fs.String("version", "", "update to this version from axis.com (\"latest\", \"lts\", \"track\" or e.g. 9.80.132)")
+	file := fs.String("file", "", "update with a local firmware file (.bin)")
+	factory := fs.String("factory", "none", "factory defaults after the update: none, soft (keep network), hard")
+	yes := fs.Bool("y", false, "don't ask")
+	dlOnly := fs.Bool("download-only", false, "only download into the cache, don't update")
+	fs.Parse(reorder(args))
+	ip, err := oneArg(fs)
+	if err != nil {
+		return err
+	}
+	switch *factory {
+	case axis.FactoryDefaultNone, axis.FactoryDefaultSoft, axis.FactoryDefaultHard:
+	default:
+		return errors.New("-factory: none, soft or hard")
+	}
+	if *version != "" && *file != "" {
+		return errors.New("-version and -file exclude each other")
+	}
+
+	c, err := login(ctx, ip, *user)
+	if err != nil {
+		return err
+	}
+	info, err := c.BasicInfo(ctx)
+	if err != nil {
+		return err
+	}
+	prod, _ := c.ProductNumber(ctx)
+	fmt.Printf("Device:    %s (%s)\nInstalled: %s\n", info.Model, ip, info.Firmware)
+
+	path := *file
+	if path == "" {
+		cat := axis.NewFirmwareCatalog()
+		p, ok, err := cat.FindProduct(ctx, prod, info.Model)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("no firmware for %q on axis.com – use -file", info.Model)
+		}
+		versions, err := cat.Versions(ctx, p)
+		if err != nil {
+			return err
+		}
+		cur, _ := axis.ParseFWVersion(info.Firmware)
+		choices := axis.FirmwareChoices(cur, versions)
+		fmt.Printf("axis.com:  %s/%s\n", p.Source, p.Folder)
+		if len(choices) == 0 {
+			fmt.Println("Up to date – no newer firmware on axis.com.")
+		}
+		for _, ch := range choices {
+			fmt.Printf("  %-12s %-30s %s\n", ch.Version, ch.Label, ch.Version.TrackName())
+		}
+		if *version == "" {
+			return nil
+		}
+		var target axis.FWVersion
+		pick := func(label string) {
+			for _, ch := range choices {
+				if strings.Contains(ch.Label, label) {
+					target = ch.Version
+				}
+			}
+		}
+		switch strings.ToLower(*version) {
+		case "latest":
+			pick("Latest")
+			if target == nil && len(versions) > 0 {
+				target = versions[0]
+			}
+		case "lts":
+			pick("Latest LTS")
+		case "track":
+			pick("Current track")
+		default:
+			v, ok := axis.ParseFWVersion(*version)
+			if !ok {
+				return fmt.Errorf("invalid version %q", *version)
+			}
+			for _, x := range versions {
+				if x.Compare(v) == 0 {
+					target = x
+				}
+			}
+			if target == nil {
+				return fmt.Errorf("version %s not found on axis.com", v)
+			}
+		}
+		if target == nil {
+			return errors.New("no matching newer version")
+		}
+		f, err := cat.File(ctx, p, target)
+		if err != nil {
+			return err
+		}
+		sess, _ := axis.LoadMyAxisSession()
+		fmt.Printf("Downloading %s (%.1f MB)…\n", f.Name, float64(f.Size)/(1<<20))
+		path, err = cat.Download(ctx, f, sess.Value, cliProgress("Download"))
+		fmt.Println()
+		if err != nil {
+			return err
+		}
+		fmt.Println("Checksum OK:", path)
+		if *dlOnly {
+			return nil
+		}
+	}
+
+	fmt.Printf("Update %s from %s with %s", info.Model, info.Firmware, filepath.Base(path))
+	if *factory != axis.FactoryDefaultNone {
+		fmt.Printf(" and reset to factory defaults (%s)", *factory)
+	}
+	fmt.Println(".")
+	if !*yes && !confirm("The device restarts and is unavailable for several minutes. Continue? [y/N] ") {
+		return errors.New("cancelled")
+	}
+	newVer, err := c.UpgradeFirmware(ctx, path, *factory, cliProgress("Upload"))
+	fmt.Println()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Upload complete, installing %s…\n", newVer)
+	if *factory == axis.FactoryDefaultHard {
+		fmt.Println("Hard factory reset: the device loses its IP settings and password – not waiting for it.")
+		return nil
+	}
+	if *factory == axis.FactoryDefaultSoft {
+		fmt.Println("Factory reset: the device has no password afterwards (axisctl init) – not waiting for it.")
+		return nil
+	}
+	err = c.WaitForUpgrade(ctx, info.Firmware, newVer, func(s axis.UpgradeStage) {
+		switch s {
+		case axis.StageRestarting:
+			fmt.Println("Device is restarting…")
+		case axis.StageDone:
+			fmt.Println("Device is back online.")
+		}
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Println("Firmware updated to", newVer)
+	return nil
+}
+
+// cliProgress prints a percentage on one line.
+func cliProgress(what string) func(done, total int64) {
+	last := -1
+	return func(done, total int64) {
+		if total <= 0 {
+			return
+		}
+		if p := int(done * 100 / total); p != last {
+			last = p
+			fmt.Printf("\r%s: %3d %%", what, min(p, 100))
+		}
+	}
+}
+
+func cmdPTZ(ctx context.Context, args []string) error {
+	fs, user := authFlags("ptz")
+	zoom := fs.String("zoom", "", "zoom one step: in or out")
+	step := fs.Int("step", 500, "step size for -zoom with ptz.cgi (1…9999)")
+	af := fs.Bool("af", false, "run the autofocus (motorized lens)")
+	calib := fs.Bool("calibrate", false, "calibrate the lens (motorized lens; takes up to a minute)")
+	fs.Parse(reorder(args))
+	ip, err := oneArg(fs)
+	if err != nil {
+		return err
+	}
+	c, err := login(ctx, ip, *user)
+	if err != nil {
+		return err
+	}
+	fmt.Print(c.PTZDiagnostics(ctx))
+	l, err := c.GetLensControls(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("== detected\nPTZ:    %+v\n", l.PTZ)
+	if l.Optics != nil {
+		fmt.Printf("Optics: %+v\n", *l.Optics)
+	}
+	if *zoom == "" && !*af && !*calib {
+		return nil
+	}
+	if (*af || *calib) && l.Optics == nil {
+		return errors.New("no motorized lens found")
+	}
+	wait := func(what string) error {
+		time.Sleep(time.Second)
+		for i := 0; i < 120; i++ {
+			st, err := c.GetOptics(ctx, *l.Optics)
+			if err != nil {
+				return err
+			}
+			if !st.Moving() {
+				fmt.Printf("== after %s: %+v\n", what, st)
+				return nil
+			}
+			time.Sleep(time.Second)
+		}
+		return errors.New(what + ": lens still moving after 2 minutes")
+	}
+	if *calib {
+		fmt.Println("Calibrating …")
+		if err := c.CalibrateOptics(ctx, *l.Optics); err != nil {
+			return err
+		}
+		if err := wait("calibration"); err != nil {
+			return err
+		}
+	}
+	if *af {
+		fmt.Println("Autofocus …")
+		if err := c.Autofocus(ctx, *l.Optics); err != nil {
+			return err
+		}
+		if err := wait("autofocus"); err != nil {
+			return err
+		}
+	}
+	if *zoom == "" {
+		return nil
+	}
+	in := *zoom == "in"
+	if !in && *zoom != "out" {
+		return errors.New("-zoom: in or out")
+	}
+	if l.Optics != nil && l.Optics.Zoom {
+		err = c.StepZoom(ctx, *l.Optics, axis.StepBig, in)
+	} else {
+		err = c.PTZStepZoom(ctx, l.PTZ, *step, in)
+	}
+	if err != nil {
+		return err
+	}
+	if l.Optics != nil {
+		return wait("zoom " + *zoom)
+	}
+	time.Sleep(2 * time.Second)
+	pos, err := c.PTZGetPosition(ctx)
+	fmt.Printf("== after zoom %s: %+v %v\n", *zoom, pos, err)
+	return nil
+}
+
 func cmdRestart(ctx context.Context, args []string) error {
 	fs, user := authFlags("restart")
 	fs.Parse(reorder(args))
@@ -449,7 +717,7 @@ func reorder(args []string) []string {
 func isBoolFlag(a string) bool {
 	a = strings.TrimLeft(a, "-")
 	switch a {
-	case "dhcp", "sync", "init", "y", "dry-run", "all":
+	case "dhcp", "sync", "init", "y", "dry-run", "all", "download-only", "af", "calibrate":
 		return true
 	}
 	return false

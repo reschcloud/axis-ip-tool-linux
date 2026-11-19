@@ -31,6 +31,13 @@ type fakeCamera struct {
 	ignoreJSONHostname bool // like some AXIS OS 9: setHostnameConfiguration has no effect
 	ntp                map[string]any
 	params             map[string]string // ImageSource./System. parameters (param.cgi)
+	ptz                bool              // PTZ camera (ptz.cgi)
+	ptzQueries         []string          // raw queries sent to ptz.cgi
+	fwUploads          [][]byte          // multipart bodies sent to firmwaremanagement.cgi
+	opticsSetup        bool              // lens via opticssetup.cgi (no opticscontrol.cgi)
+	opticsSetupQueries []string
+	optics             []map[string]any  // requests to opticscontrol.cgi
+	frames             int               // number of MJPEG frames before the stream ends
 }
 
 func md5hex(s string) string { h := md5.Sum([]byte(s)); return hex.EncodeToString(h[:]) }
@@ -150,6 +157,17 @@ func (f *fakeCamera) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, "OK")
 			return
 		}
+		if q.Get("group") == "Properties.PTZ" {
+			io.WriteString(w, "root.Properties.PTZ.PTZ="+yesNo(f.ptz)+"\n")
+			return
+		}
+		if q.Get("group") == "PTZ.Support" {
+			for _, k := range []string{"ContinuousPan", "ContinuousTilt", "ContinuousZoom", "AreaZoom", "ServerPreset"} {
+				io.WriteString(w, "root.PTZ.Support.S1."+k+"=true\n")
+			}
+			io.WriteString(w, "root.PTZ.Support.S1.ContinuousFocus=false\n")
+			return
+		}
 		if q.Get("group") == "ImageSource" {
 			for k, v := range f.params {
 				if strings.HasPrefix(k, "ImageSource.") {
@@ -159,6 +177,72 @@ func (f *fakeCamera) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		io.WriteString(w, "root.Brand.Brand=AXIS\n")
+	case "/axis-cgi/firmwaremanagement.cgi":
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+			f.fwUploads = append(f.fwUploads, body)
+			io.WriteString(w, `{"apiVersion":"1.0","method":"upgrade","data":{"firmwareVersion":"12.11.77"}}`)
+			return
+		}
+		io.WriteString(w, `{"apiVersion":"1.0","method":"status","data":{"activeFirmwareVersion":"11.11.73","isCommited":true}}`)
+	case "/axis-cgi/com/ptz.cgi":
+		f.ptzQueries = append(f.ptzQueries, r.URL.RawQuery)
+		if r.URL.Query().Get("query") == "position" {
+			if f.ptz {
+				io.WriteString(w, "pan=0\ntilt=0\nzoom=1\n")
+			}
+			return
+		}
+		if r.URL.Query().Get("query") == "presetposcam" {
+			io.WriteString(w, "Preset Positions for camera 1\npresetposno3=Door\npresetposno1=Home\n")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case "/axis-cgi/opticssetup.cgi":
+		if !f.opticsSetup {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		f.opticsSetupQueries = append(f.opticsSetupQueries, r.URL.RawQuery)
+		if r.URL.Query().Get("monitor") == "poll" {
+			io.WriteString(w, `<?xml version="1.0"?><devInfo><opticsSetupState focusMeasure="2.5e7" `+
+				`focusOperationInProgress="1" focusPosition="0.281664" isDay="1" `+
+				`zoomOperationInProgress="0" zoomPosition="0.150000" /></devInfo>`)
+			return
+		}
+		io.WriteString(w, "ok\n")
+	case "/axis-cgi/opticscontrol.cgi":
+		if f.opticsSetup {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var req map[string]any
+		json.Unmarshal(body, &req)
+		f.optics = append(f.optics, req)
+		switch req["method"] {
+		case "getCapabilities":
+			io.WriteString(w, `{"apiVersion":"1.2","method":"getCapabilities","data":{"numberOfOptics":1,
+			  "optics":[{"opticsId":"0","capabilities":["focus","zoom","calibrateFocus","calibrateZoom"],"maxMagnification":3.5}]}}`)
+		case "getOptics":
+			io.WriteString(w, `{"data":{"numberOfOptics":1,"optics":[{"opticsId":"0","focusPosition":0.25,
+			  "focusMoving":true,"magnification":2.0,"zoomMoving":false}]}}`)
+		case "setFocus":
+			io.WriteString(w, `{"error":{"code":2105,"message":"Authorization failed"}}`)
+		default:
+			io.WriteString(w, `{"data":{}}`)
+		}
+	case "/axis-cgi/mjpg/video.cgi":
+		if r.URL.Query().Get("resolution") != "" {
+			w.WriteHeader(400)
+			return
+		}
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=myboundary")
+		for i := 0; i < f.frames; i++ {
+			jpg := []byte{0xFF, 0xD8, byte(i), 0xFF, 0xD9}
+			io.WriteString(w, "--myboundary\r\nContent-Type: image/jpeg\r\nContent-Length: "+
+				strconv.Itoa(len(jpg))+"\r\n\r\n")
+			w.Write(jpg)
+			io.WriteString(w, "\r\n")
+		}
 	case "/axis-cgi/time.cgi":
 		io.WriteString(w, `{"error":{"code":2002,"message":"Invalid time zone"}}`)
 	default:

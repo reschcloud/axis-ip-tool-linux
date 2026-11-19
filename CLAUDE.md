@@ -48,6 +48,31 @@ Always use `make gui` for quick checks.
   `AddressInUse` (TCP 80/443), `RunBatch` (sequential, IP last, errors don't stop the rest).
   GUI: `cmd/axis-ip-tool/batch.go` (wizard with `adw.NavigationView`), CLI: `axisctl batch`.
 - `cmd/axisctl`: CLI with subcommands; password from `$AXIS_PASSWORD` or terminal prompt.
+- Firmware update (modeled on github.com/Cacsjep/oadm, Apache-2.0 – only the approach, no code):
+  `internal/axis/firmware.go`: catalog = public HTML listings `axis.com/ftp/pub_soft/{MPQT,PACS}/
+  <Product>/<12_11_77>/` (regex parser, name/size/SHA-256), model match via normalized
+  ProdNbr (exact, else longest prefix), `FirmwareChoices` (current track: LTS → same
+  major.minor, else same major; latest LTS; latest). Download only with cookie
+  `axis_connect_session_sid` (else 302 to login), SHA-256 check, cache by hash.
+  **Own User-Agent on purpose:** axis.com serves .bin files to the default
+  `Go-http-client` UA *without* login – don't rely on/exploit that.
+  `fwmgr.go`: `firmwaremanagement.cgi` apiVersion 1.0 `status`/`upgrade` (multipart json+file,
+  streamed via `sendBody`, status call first primes digest), `WaitForUpgrade` polls BasicInfo.
+  Session stored in `~/.config/axis-ip-tool/myaxis-session.json` (0600) or `$AXIS_MYAXIS_SESSION`.
+  GUI: `cmd/axis-ip-tool/firmware.go` (dialog for 1…n devices, list hint `fwHints` in the
+  firmware column), `myaxis.go`: My Axis sign-in with **WebKitGTK 6.0 loaded via dlopen**
+  (no build dependency; packages only "recommend" it), reads the cookie via the cookie manager.
+  CLI: `axisctl firmware`.
+- Live view (`cmd/axis-ip-tool/liveview.go`): MJPEG via `Client.Stream` (`stream.go`, own
+  multipart parser using Content-Length – `mime/multipart` delivers a frame only when the next
+  boundary arrives; no 8 s client timeout), fallback snapshot polling on `ErrNotSupported`.
+  Fixed sidebar (no toggle), capabilities are loaded together with the first snapshot
+  (`loadPreview`) so it is there when the dialog opens. From `GetLensControls` (`ptz.go`):
+  `ptz.cgi` (caps from `PTZ.Support.S1.*`, only if `Properties.PTZ.PTZ=yes`; without continuous
+  zoom/focus step buttons via `rzoom`/`rfocus` or absolute `zoom`/`focus` + `query=position`) and `opticscontrol.cgi` (apiVersion `"1"`, zoom/focus/
+  autofocus/`calibrate`; admin only, error 2105 = "Allow anonymous viewers" is on). Device
+  commands go through one ordered worker queue so a stop never overtakes its start; hold
+  buttons use `GestureDrag` (GestureClick emits "stopped" on long press). PTZ stop on close.
 
 ## Important decisions / pitfalls
 
@@ -55,6 +80,8 @@ Always use `make gui` for quick checks.
   `gotk4 v0.3.2-0.20250703…`) so the build works on Ubuntu 24.04 (GTK 4.14, GLib 2.80).
   Newer gotk4 versions require GLib ≥ 2.86 and break there. Don't use Adw APIs > 1.5
   (e.g. no `Adw.Spinner`, `Adw.ToggleGroup`) – otherwise adapt CI/Ubuntu packages.
+- CI builds with the **latest stable Go** (`setup-go` `go-version: stable`), not the `go 1.24.0`
+  minimum from go.mod: govulncheck fails on the old standard library (net/http CVEs).
 - In gotk4 the ColumnView factory delivers `*gtk.ColumnViewCell`, not `*gtk.ListItem` →
   use interface `listCell`. Compare widgets via `coreglib.InternObject(x).Native()`.
 - gotk4 can't pass `GskRenderNode`s (not GObjects) → `screenshot.go` renders the window content
@@ -81,6 +108,16 @@ Always use `make gui` for quick checks.
   `systemready.cgi` without it with "Invalid POST data". A heuristic 401 only means "unknown"
   (`ErrSetupUnknown`), not "has a user". This firmware also locks `basicdeviceinfo.cgi`/
   `apidiscovery.cgi` (401) in factory state.
+- **Motorized lens on older firmware** (P3225-VE Mk II, 9.80): no `opticscontrol.cgi` (404); the
+  web UI uses `opticssetup.cgi` (found in its JS bundle): `monitor=poll` (XML `opticsSetupState`,
+  `focusPosition`/`zoomPosition` 0…1, `*OperationInProgress`), `azoom`/`afocus=0…1`,
+  `rzoom`/`rfocus=±minstep|±bigstep` (**literal `+`**, `%2B` → 400), `autofocus=perform`,
+  `calibrate=focus,zoom`, `stop=focus|zoom`, `action=resetfocus`. Calibrate/autofocus block until
+  done (~50 s) → always `&nonblocking=yes` and poll. `Optics.Legacy` selects this API; zoom is then
+  a position 0…1 (slider in %), not a magnification.
+  `ptz.cgi` on such fixed cameras is only **digital PTZ** of view areas: `PTZ.Support.S1.*`
+  claims pan/tilt/zoom, but channel 1 (overview) answers "PTZ disabled" and an empty
+  `query=position` → `PTZCapabilities` only reports PTZ if the position query returns values.
 - Commissioning (`setup.go`, `ApplyInitialSetup`): power line frequency
   `ImageSource.I<n>.CaptureFrequency` (`50Hz`/`60Hz`) + `System.CaptureFrequencySet=yes`, mounting
   position `ImageSource.I<n>.CameraTiltOrientation` (`-90` ceiling, `0` wall, `90` desk) – like the
@@ -131,6 +168,11 @@ Tested (Ubuntu 24.04 container, Xvfb, fake cameras as Python HTTP servers + `ava
 **Not tested:** applying network/time settings in the GUI, NTP/preview on a real camera,
 SSDP against real devices, `make packages` (nfpm) locally, Flatpak build, install.sh,
 going offline (unplugging a camera) in the GUI, double-click IPv6 in the GUI.
+Live view MJPEG stream, PTZ (`ptz.cgi`) and optics control/lens calibration
+(`opticscontrol.cgi`) only against the fake camera – not yet on real devices.
+P3225-VE Mk II (9.80.132, 2026-11-19): lens via `opticssetup.cgi` tested – detection, zoom
+(absolute/steps), focus, autofocus, calibration (~50 s) via `axisctl ptz -zoom/-af/-calibrate`;
+GUI live view on that device not yet clicked through.
 
 ## Open points / ideas
 
@@ -140,6 +182,8 @@ going offline (unplugging a camera) in the GUI, double-click IPv6 in the GUI.
 4. Move the UI to Blueprint (`.blp`)? Currently built in code (gotk4 templates are cumbersome).
 5. Batch configuration: implemented (v0.2.0), GUI wizard not yet run through on real cameras.
    Idea: preview image per device in the preview table; restart for several.
-6. Firmware update. (Factory reset implemented: `FactoryReset`, GUI "Reset", `axisctl reset`;
+6. Firmware update implemented (see above) – untested on real cameras and with a real
+   My Axis account (only fake camera/fake axis.com + real public listings; sign-in dialog only
+   smoke-tested). (Factory reset implemented: `FactoryReset`, GUI "Reset", `axisctl reset`;
    tested via CLI on P3225.) (NTP via `ntp.cgi` implemented, untested on P3225-VE Mk II.)
 7. Translations (gettext) – currently English only (was German until v0.2.0).

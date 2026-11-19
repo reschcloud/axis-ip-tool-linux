@@ -20,10 +20,13 @@ Not an official product of Axis Communications AB.
 | IPv4 (DHCP/static), hostname, DNS | `network_settings.cgi`, fallback `param.cgi` |
 | Time zone + time | `time.cgi`, fallback `date.cgi` |
 | NTP servers | `ntp.cgi`, fallback `param.cgi` |
-| Preview image | `jpg/image.cgi` (1 image/s) |
+| Live view | `mjpg/video.cgi` (MJPEG stream, fallback `jpg/image.cgi` 1 image/s) |
+| PTZ: pan/tilt, zoom, focus, presets, click to center | `com/ptz.cgi` |
+| Motorized lens: zoom, focus, autofocus, lens calibration | `opticscontrol.cgi` (Optics Control API) |
 | Several devices at once | password, sequential IPs, hostname pattern, time/NTP; CSV plan; log |
 | Open website, restart | default browser, `restart.cgi` |
 | Factory defaults (optionally including IP) | `factorydefault.cgi` / `hardfactorydefault.cgi` |
+| Firmware: compare with axis.com, download, update (several devices) | AXIS OS listings on axis.com (SHA-256), My Axis sign-in, `firmwaremanagement.cgi` |
 
 ## Installation
 
@@ -93,6 +96,9 @@ axisctl reset 192.168.0.90                     # factory defaults (IP is kept; -
 axisctl batch -init -ip 10.0.0.20/24 -gw 10.0.0.1 -hostname 'camera-##' \
               -ntp pool.ntp.org ACCC8E000001 ACCC8E000002 ACCC8E000003
 axisctl batch -ip 10.0.0.1/24 -csv plan.csv -dry-run   # assignment from CSV, show only
+axisctl firmware 192.168.0.90                  # compare installed firmware with axis.com
+axisctl firmware 192.168.0.90 -version track   # update to the newest version of its track
+axisctl firmware 192.168.0.90 -file P3225-VE_Mk_II_9_80_132.bin   # local file
 ```
 
 ### Batch configuration
@@ -136,6 +142,14 @@ packaging/           nfpm configuration, Flatpak manifest, install.sh, package s
   (column "Connection"). The cameras' self-signed certificates are accepted without
   verification: encrypted, but no protection against an active attacker on the network.
   Menu → "Use HTTPS only" or `axisctl --https-only` forbids the fallback to HTTP.
+- **Firmware update:** the firmware column shows when axis.com has a newer version on the
+  device's track (LTS tracks stay on their track; menu → "Check axis.com for firmware
+  updates" turns this off). Downloading needs a free Axis account: "Firmware" → "Sign in"
+  opens the Axis sign-in page in an embedded browser (WebKitGTK 6.0, optional package);
+  the app keeps only the session cookie (`~/.config/axis-ip-tool/myaxis-session.json`, mode
+  0600, valid for about four weeks), never the password. `axisctl` uses the same session or
+  `$AXIS_MYAXIS_SESSION`. Downloads are checked against the SHA-256 from axis.com and cached
+  in `~/.cache/axis-ip-tool/firmware`; the device verifies the signature itself.
 - Screenshot for this README: `AXIS_IP_TOOL_SCREENSHOT=data/screenshots/main-window.png axis-ip-tool`
   renders the window after a few seconds and quits.
 

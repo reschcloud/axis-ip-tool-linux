@@ -166,14 +166,62 @@ func (c *Client) Secure(ctx context.Context) bool {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte, ctype string, auth bool) (int, []byte, error) {
-	base, err := c.baseURL(ctx)
+	resp, err := c.send(ctx, c.hc, method, path, body, ctype, auth)
 	if err != nil {
 		return 0, nil, err
 	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, data, statusError(resp.StatusCode, path)
+}
+
+// statusError maps HTTP status codes to the package errors.
+func statusError(code int, path string) error {
+	switch code {
+	case http.StatusUnauthorized:
+		return ErrAuth
+	case http.StatusForbidden:
+		return fmt.Errorf("%w (no admin rights)", ErrAuth)
+	case http.StatusNotFound:
+		return ErrNotSupported
+	}
+	if code >= 400 {
+		return fmt.Errorf("HTTP %d from %s", code, path)
+	}
+	return nil
+}
+
+// send performs the request incl. digest/basic authentication and returns the response
+// with an unread body (the caller closes it). The status code is not checked.
+func (c *Client) send(ctx context.Context, hc *http.Client, method, path string, body []byte, ctype string, auth bool) (*http.Response, error) {
+	return c.sendBody(ctx, hc, method, path, func() (io.Reader, int64, error) {
+		return bytes.NewReader(body), int64(len(body)), nil
+	}, ctype, auth)
+}
+
+// sendBody is send with a body that is opened anew for every attempt (digest auth may
+// need a second request) – for large uploads that should not be held in memory.
+func (c *Client) sendBody(ctx context.Context, hc *http.Client, method, path string,
+	body func() (io.Reader, int64, error), ctype string, auth bool) (*http.Response, error) {
+	base, err := c.baseURL(ctx)
+	if err != nil {
+		return nil, err
+	}
 	send := func(authz string) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(body))
+		r, n, err := body()
 		if err != nil {
 			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, method, base+path, r)
+		if err != nil {
+			return nil, err
+		}
+		req.ContentLength = n
+		if n == 0 {
+			req.Body = http.NoBody
 		}
 		if ctype != "" {
 			req.Header.Set("Content-Type", ctype)
@@ -183,7 +231,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, ctype
 		} else if authz != "" {
 			req.Header.Set("Authorization", authz)
 		}
-		return c.hc.Do(req)
+		return hc.Do(req)
 	}
 	authFor := func(ch *challenge) string {
 		if ch == nil {
@@ -203,51 +251,45 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, ctype
 	}
 	resp, err := send(authz)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized && auth && c.user != "" {
-		io.Copy(io.Discard, resp.Body)
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
 		ch := parseChallenges(resp.Header.Values("WWW-Authenticate"))
 		if ch == nil {
-			return 0, nil, ErrAuth
+			return nil, ErrAuth
 		}
 		c.mu.Lock()
 		c.chal = ch
 		authz = authFor(ch)
 		c.mu.Unlock()
 		if resp, err = send(authz); err != nil {
-			return 0, nil, err
+			return nil, err
 		}
 	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-	if err != nil {
-		return 0, nil, err
-	}
-	switch resp.StatusCode {
-	case http.StatusUnauthorized:
-		return resp.StatusCode, data, ErrAuth
-	case http.StatusForbidden:
-		return resp.StatusCode, data, fmt.Errorf("%w (no admin rights)", ErrAuth)
-	case http.StatusNotFound:
-		return resp.StatusCode, data, ErrNotSupported
-	}
-	if resp.StatusCode >= 400 {
-		return resp.StatusCode, data, fmt.Errorf("HTTP %d from %s", resp.StatusCode, path)
-	}
-	return resp.StatusCode, data, nil
+	return resp, nil
 }
 
-type apiError struct {
+// APIError is an error reported by a JSON API in its "error" object.
+type APIError struct {
+	Method  string `json:"-"`
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
 
+func (e *APIError) Error() string {
+	return fmt.Sprintf("%s: %s (Code %d)", e.Method, e.Message, e.Code)
+}
+
 func (c *Client) jsonCall(ctx context.Context, cgi, method string, params any, auth bool, out any) error {
+	return c.jsonCallVersion(ctx, cgi, "1.0", method, params, auth, out)
+}
+
+func (c *Client) jsonCallVersion(ctx context.Context, cgi, version, method string, params any, auth bool, out any) error {
 	// "context" is optional according to VAPIX, but some firmware (e.g. P3225-VE Mk II)
 	// rejects systemready.cgi without it with "Invalid POST data".
-	req := map[string]any{"apiVersion": "1.0", "context": "axis-ip-tool", "method": method}
+	req := map[string]any{"apiVersion": version, "context": "axis-ip-tool", "method": method}
 	if params != nil {
 		req["params"] = params
 	}
@@ -258,13 +300,14 @@ func (c *Client) jsonCall(ctx context.Context, cgi, method string, params any, a
 	}
 	var resp struct {
 		Data  json.RawMessage `json:"data"`
-		Error *apiError       `json:"error"`
+		Error *APIError       `json:"error"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return fmt.Errorf("%s: invalid response: %w", method, err)
 	}
 	if resp.Error != nil {
-		return fmt.Errorf("%s: %s (Code %d)", method, resp.Error.Message, resp.Error.Code)
+		resp.Error.Method = method
+		return resp.Error
 	}
 	if out != nil && len(resp.Data) > 0 {
 		return json.Unmarshal(resp.Data, out)

@@ -20,6 +20,7 @@ const appID = "io.github.reschcloud.AxisIpTool"
 var version = "dev"
 
 func main() {
+	axis.UserAgent = "axis-ip-tool/" + version
 	if s, err := loadSettings(); err == nil {
 		axis.SetHTTPSOnly(s.HTTPSOnly)
 	}

@@ -11,6 +11,8 @@ import (
 // settings are the persistently stored settings of the app.
 type settings struct {
 	HTTPSOnly bool `json:"httpsOnly"`
+	// don't compare the firmware with axis.com in the background
+	NoFirmwareCheck bool `json:"noFirmwareCheck,omitempty"`
 	// commissioning; nil = default (50 Hz, ceiling), 0 or "" = don't change
 	PowerFrequency *int    `json:"powerFrequency,omitempty"`
 	Mount          *string `json:"mount,omitempty"`
@@ -54,4 +56,10 @@ func saveSettings(s settings) error {
 	}
 	b, _ := json.MarshalIndent(s, "", "  ")
 	return os.WriteFile(p, b, 0o644)
+}
+
+// firmwareCheckEnabled: compare the firmware with axis.com in the background (default on).
+func firmwareCheckEnabled() bool {
+	s, _ := loadSettings()
+	return !s.NoFirmwareCheck
 }

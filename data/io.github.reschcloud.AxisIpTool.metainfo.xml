@@ -16,7 +16,7 @@
       <li>Create the first administrator on devices in factory default state and set power line frequency and mounting position</li>
       <li>Configure IPv4 (DHCP or static), hostname and DNS</li>
       <li>Set time zone, NTP servers or synchronise the clock</li>
-      <li>Show a live snapshot preview</li>
+      <li>Live view with PTZ control, zoom/focus, autofocus and lens calibration</li>
       <li>Configure many devices at once: sequential IP addresses, numbered host names or a CSV plan</li>
       <li>Open the web interface (also via link-local IPv6), restart devices or reset them to factory defaults</li>
     </ul>

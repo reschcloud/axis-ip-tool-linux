@@ -11,10 +11,8 @@ import (
 	"time"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
-	"github.com/diamondburned/gotk4/pkg/gdk/v4"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
-	"github.com/diamondburned/gotk4/pkg/pango"
 
 	"axis-ip-tool/internal/axis"
 )
@@ -655,9 +653,7 @@ func (w *window) timeDialog(d *axis.Device, st ntpState) {
 	dlg.Present(w)
 }
 
-// ---------------------------------------------------------------- Preview
-
-const previewWidth = 1280
+// ---------------------------------------------------------------- Live view (liveview.go)
 
 func (w *window) onPreview() {
 	d := w.selected()
@@ -669,93 +665,7 @@ func (w *window) onPreview() {
 		w.onPassword()
 		return
 	}
-	withLogin(w, d, "Preview", func(ctx context.Context, c *axis.Client) ([]byte, error) {
-		return c.Snapshot(ctx, previewWidth)
-	}, func(img []byte) { w.previewDialog(d, img) })
-}
-
-func (w *window) previewDialog(d *axis.Device, first []byte) {
-	dlg := adw.NewDialog()
-	dlg.SetTitle("Preview – " + label(d))
-	dlg.SetContentWidth(960)
-	dlg.SetContentHeight(620)
-
-	pic := gtk.NewPicture()
-	pic.SetContentFit(gtk.ContentFitContain)
-	pic.SetCanShrink(true)
-	pic.SetVExpand(true)
-	pic.SetHExpand(true)
-
-	status := gtk.NewLabel("")
-	status.AddCSSClass("dim-label")
-	status.SetEllipsize(pango.EllipsizeEnd)
-
-	live := gtk.NewToggleButton()
-	live.SetIconName("media-playback-start-symbolic")
-	live.SetTooltipText("Refresh automatically (1 image/s)")
-	live.SetActive(true)
-	refresh := gtk.NewButtonFromIconName("view-refresh-symbolic")
-	refresh.SetTooltipText("Reload image")
-
-	hb := adw.NewHeaderBar()
-	hb.PackStart(live)
-	hb.PackStart(refresh)
-	bar := gtk.NewActionBar()
-	bar.SetCenterWidget(status)
-
-	tv := adw.NewToolbarView()
-	tv.AddTopBar(hb)
-	tv.SetContent(pic)
-	tv.AddBottomBar(bar)
-	dlg.SetChild(tv)
-
-	show := func(img []byte) {
-		tex, err := gdk.NewTextureFromBytes(glib.NewBytes(img))
-		if err != nil {
-			status.SetText("Image not readable: " + err.Error())
-			return
-		}
-		pic.SetPaintable(tex)
-		status.SetText(fmt.Sprintf("%d × %d · as of %s", tex.Width(), tex.Height(), time.Now().Format("15:04:05")))
-	}
-	show(first)
-
-	key, ip, port := d.Key(), d.IP, d.Port
-	closed, loading := false, false
-	fetch := func() {
-		if closed || loading {
-			return
-		}
-		loading = true
-		creds := w.creds[key]
-		async(func() ([]byte, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			defer cancel()
-			return axis.NewClient(ip, port, creds[0], creds[1]).Snapshot(ctx, previewWidth)
-		}, func(img []byte) {
-			loading = false
-			if !closed {
-				show(img)
-			}
-		}, func(err error) {
-			loading = false
-			if !closed {
-				status.SetText(err.Error())
-			}
-		})
-	}
-	refresh.ConnectClicked(fetch)
-	glib.TimeoutAdd(1000, func() bool {
-		if closed {
-			return false
-		}
-		if live.Active() {
-			fetch()
-		}
-		return true
-	})
-	dlg.ConnectClosed(func() { closed = true })
-	dlg.Present(w)
+	withLogin(w, d, "Live view", loadPreview, func(st previewStart) { w.previewDialog(d, st) })
 }
 
 func (w *window) onRestart() {

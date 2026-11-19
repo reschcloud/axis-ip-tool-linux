@@ -41,7 +41,7 @@ var columns = []column{
 	{"IPv4 address", false, func(d *axis.Device) string { return d.IP }, func(a, b *axis.Device) bool { return axis.IPLess(a.IP, b.IP) }},
 	{"IPv6 address", false, func(d *axis.Device) string { return d.PreferredIPv6() }, nil},
 	{"Interface", false, func(d *axis.Device) string { return d.Iface }, nil},
-	{"Firmware", false, func(d *axis.Device) string { return d.Firmware }, nil},
+	{"Firmware", false, firmwareText, nil},
 	{"Ping", false, func(d *axis.Device) string { return d.PingText() }, nil},
 	{"Connection", false, func(d *axis.Device) string { return d.Connection() }, nil},
 	{"Status", false, func(d *axis.Device) string { return d.Status() }, nil},
@@ -67,6 +67,7 @@ type window struct {
 	lastUser   string                  // user name entered last (preset)
 	lastForAll bool                    // "for all others too" chosen last
 	cells      map[string][]*gtk.Label // bound cells per device, for live updates
+	fwCheck    bool                    // compare firmware with axis.com (list hint)
 
 	keys      *gtk.StringList
 	filter    *gtk.CustomFilter
@@ -97,6 +98,7 @@ func newWindow(app *adw.Application) *window {
 		spin:              map[string]*gtk.Spinner{},
 		statusParts:       map[uintptr]statusPart{},
 		fwd:               axis.NewForwarder(),
+		fwCheck:           firmwareCheckEnabled(),
 		infoAt:            map[string]time.Time{},
 	}
 	w.SetTitle("Axis IP Tool")
@@ -148,6 +150,7 @@ func (w *window) build() {
 
 	menu := gio.NewMenu()
 	menu.Append("Use HTTPS only", "win.https-only")
+	menu.Append("Check axis.com for firmware updates", "win.fw-check")
 	menu.Append("Forget stored credentials", "win.forget")
 	menu.Append("About Axis IP Tool", "app.about")
 	mb := gtk.NewMenuButton()
@@ -206,12 +209,13 @@ func (w *window) build() {
 	}
 	for _, b := range []btn{
 		{"browser", "Open website", "web-browser-symbolic", false, w.onBrowser},
-		{"preview", "Preview", "camera-photo-symbolic", false, w.onPreview},
+		{"preview", "Live view", "camera-video-symbolic", false, w.onPreview},
 		{"password", "Set password", "dialog-password-symbolic", false, w.onPassword},
 		{"network", "Network", "network-wired-symbolic", false, w.onNetwork},
 		{"time", "Date & time", "preferences-system-time-symbolic", false, w.onTime},
 		{"restart", "Restart", "system-reboot-symbolic", true, w.onRestart},
 		{"reset", "Reset", "edit-undo-symbolic", true, w.onReset},
+		{"firmware", "Firmware", "software-update-available-symbolic", true, w.onFirmware},
 		{"batch", "Configure multiple", "view-list-bullet-symbolic", true, w.onBatch},
 	} {
 		content := adw.NewButtonContent()
@@ -264,6 +268,23 @@ func (w *window) build() {
 		w.rescan()
 	})
 	w.AddAction(httpsOnly)
+	fwCheck := gio.NewSimpleActionStateful("fw-check", nil, glib.NewVariantBoolean(w.fwCheck))
+	fwCheck.ConnectActivate(func(*glib.Variant) {
+		w.fwCheck = !w.fwCheck
+		fwCheck.SetState(glib.NewVariantBoolean(w.fwCheck))
+		off := !w.fwCheck
+		if err := updateSettings(func(s *settings) { s.NoFirmwareCheck = off }); err != nil {
+			w.toast("Setting not saved: " + err.Error())
+		}
+		if off {
+			clear(fwHints)
+		}
+		for _, d := range w.reg.All() {
+			w.checkFirmware(d.Key())
+			w.rerender(d.Key())
+		}
+	})
+	w.AddAction(fwCheck)
 	w.updateActions()
 }
 
@@ -628,6 +649,11 @@ func (w *window) updateActions() {
 			b.SetVisible(len(sel) >= 2)
 			continue
 		}
+		if k == "firmware" {
+			b.SetSensitive(online >= 1)
+			b.SetTooltipText("Compare with axis.com and update the firmware")
+			continue
+		}
 		b.SetSensitive(usable)
 		b.SetVisible(len(sel) < 2)
 	}
@@ -696,6 +722,7 @@ func (w *window) onDevice(ctx context.Context, d axis.Device) {
 	w.filter.Changed(gtk.FilterChangeDifferent)
 	w.updateActions()
 	w.refreshInfo(key)
+	w.checkFirmware(key)
 }
 
 // refreshInfo reads model and firmware with login if the device doesn't reveal them

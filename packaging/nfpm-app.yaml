@@ -36,10 +36,15 @@ scripts:
   postinstall: packaging/scripts/app-postinstall.sh
   postremove: packaging/scripts/app-postinstall.sh
 
+# WebKitGTK 6.0 is optional (loaded at runtime): only the My Axis sign-in for
+# firmware downloads needs it.
 overrides:
   rpm:
     depends: [gtk4, "libadwaita >= 1.5"]
+    recommends: [webkitgtk6.0]
   deb:
     depends: [libgtk-4-1, "libadwaita-1-0 (>= 1.5)"]
+    recommends: [libwebkitgtk-6.0-4]
   archlinux:
     depends: [gtk4, libadwaita]
+    recommends: ["webkitgtk-6.0: My Axis sign-in for firmware downloads"]
