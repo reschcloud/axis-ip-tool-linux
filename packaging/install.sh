@@ -1,14 +1,14 @@
 #!/bin/sh
 # IP Tool for AXIS (Linux) – installation with one command
 #
-#   curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/reschcloud/ip-tool-for-axis-linux/releases/latest/download/install.sh | sh
 #
 # Options (append after "sh -s --"):
 #   --uninstall     remove everything again
 #   --flatpak       Flatpak instead of system package (default on Silverblue/Bazzite & co.)
 set -eu
 
-REPO="${IP_TOOL_FOR_AXIS_REPO:-reschcloud/axis-ip-tool-linux}"
+REPO="${IP_TOOL_FOR_AXIS_REPO:-reschcloud/ip-tool-for-axis-linux}"
 BASE="https://github.com/$REPO/releases/latest/download"
 APP_ID=io.github.reschcloud.IPToolForAXIS
 PKG=ip-tool-for-axis

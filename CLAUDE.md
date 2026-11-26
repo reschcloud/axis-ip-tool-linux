@@ -89,7 +89,7 @@ Always use `make gui` for quick checks.
 - `go.mod` contains `replace` directives to the GitHub mirrors of `golang.org/x/*` and
   `go4.org/…` (the development environment had no access to proxy.golang.org). They are
   harmless; remove them and run `go mod tidy` if you like.
-- App ID: `io.github.reschcloud.IPToolForAXIS`, repo `github.com/reschcloud/axis-ip-tool-linux`
+- App ID: `io.github.reschcloud.IPToolForAXIS`, repo `github.com/reschcloud/ip-tool-for-axis-linux`
   (file names in `data/`, `packaging/`, constant in `main.go`, `APP_ID` in Makefile/install.sh).
   License: AGPL-3.0-or-later (since v0.3.0; before GPL-3.0-or-later).
 - Packages: one package `ip-tool-for-axis` (GUI + CLI) for x86_64 and arm64. Release builds natively

@@ -25,11 +25,11 @@
   <screenshots>
     <screenshot type="default">
       <caption>Discovered cameras with status, IPv6 address and ping</caption>
-      <image>https://raw.githubusercontent.com/reschcloud/axis-ip-tool-linux/v0.3.0/data/screenshots/main-window.png</image>
+      <image>https://raw.githubusercontent.com/reschcloud/ip-tool-for-axis-linux/v0.4.0/data/screenshots/main-window.png</image>
     </screenshot>
   </screenshots>
-  <url type="homepage">https://github.com/reschcloud/axis-ip-tool-linux</url>
-  <url type="bugtracker">https://github.com/reschcloud/axis-ip-tool-linux/issues</url>
+  <url type="homepage">https://github.com/reschcloud/ip-tool-for-axis-linux</url>
+  <url type="bugtracker">https://github.com/reschcloud/ip-tool-for-axis-linux/issues</url>
   <launchable type="desktop-id">io.github.reschcloud.IPToolForAXIS.desktop</launchable>
   <provides>
     <binary>ip-tool-for-axis</binary>
@@ -44,6 +44,13 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.0" date="2026-11-26">
+      <description>
+        <p>Renamed to IP Tool for AXIS (Linux), with a new package name, Flatpak ID and CLI command.
+          Adds camera firmware updates, live view with PTZ and lens controls, and an app update notice
+          at startup. See the project README for migration from the old package.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-11-18">
       <description>
         <p>English user interface. Continuous monitoring with ping and status, IPv6 address and interface

@@ -34,13 +34,13 @@ Not an official product of Axis Communications AB.
 get the Flatpak variant):
 
 ```sh
-curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/reschcloud/ip-tool-for-axis-linux/releases/latest/download/install.sh | sh
 ```
 
 Remove:
 
 ```sh
-curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/download/install.sh | sh -s -- --uninstall
+curl -fsSL https://github.com/reschcloud/ip-tool-for-axis-linux/releases/latest/download/install.sh | sh -s -- --uninstall
 ```
 
 **Manually:** download the package from the release page and install it, e.g.
@@ -63,13 +63,13 @@ At startup, the app checks GitHub for a newer stable release. If one is availabl
 **Update available** button beside the app menu opens its release page. The app doesn't update
 itself. Find the installed version under Menu → "About IP Tool for AXIS (Linux)" or with
 `ip-tool-for-axis-cli version`.
-You can also browse the [release history](https://github.com/reschcloud/axis-ip-tool-linux/releases).
+You can also browse the [release history](https://github.com/reschcloud/ip-tool-for-axis-linux/releases).
 
 **Installed with the install command** (package or Flatpak): just run the same command again –
 it downloads the latest version and replaces the installed one:
 
 ```sh
-curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/reschcloud/ip-tool-for-axis-linux/releases/latest/download/install.sh | sh
 ```
 
 **Installed manually:** download the new package from the release page and install it the same

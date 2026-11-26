@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const repository = "reschcloud/axis-ip-tool-linux"
+const repository = "reschcloud/ip-tool-for-axis-linux"
 
 // Check returns the tag of a newer stable release, or an empty tag when none is available.
 func Check(ctx context.Context, installed string) (string, error) {

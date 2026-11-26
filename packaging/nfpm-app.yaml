@@ -12,7 +12,7 @@ description: |
   GNOME app and command line tool (ip-tool-for-axis-cli), modeled on the AXIS IP Utility.
   Not an official product of Axis Communications AB.
 license: AGPL-3.0-or-later
-homepage: https://github.com/reschcloud/axis-ip-tool-linux
+homepage: https://github.com/reschcloud/ip-tool-for-axis-linux
 
 contents:
   - src: build/ip-tool-for-axis
