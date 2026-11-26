@@ -50,7 +50,7 @@ jobs:
 
       - name: Vulnerability check (govulncheck)
         if: matrix.goarch == 'amd64'
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
 
       - name: Validate desktop file and metainfo
         run: |
