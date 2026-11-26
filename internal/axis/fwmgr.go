@@ -70,7 +70,7 @@ func (c *Client) UpgradeFirmware(ctx context.Context, path, factoryDefault strin
 	}
 
 	params, _ := json.Marshal(map[string]any{
-		"apiVersion": "1.0", "context": "axis-ip-tool", "method": "upgrade",
+		"apiVersion": "1.0", "context": "ip-tool-for-axis", "method": "upgrade",
 		"params": map[string]any{"factoryDefaultMode": factoryDefault},
 	})
 	var head bytes.Buffer

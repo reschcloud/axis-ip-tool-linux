@@ -1,12 +1,12 @@
 # Flatpak manifest. Build locally: `make flatpak` (downloads the Go modules during the build).
 # For Flathub the modules would have to be vendored first (go mod vendor) since it builds offline.
-id: io.github.reschcloud.AxisIpTool
+id: io.github.reschcloud.IPToolForAXIS
 runtime: org.gnome.Platform
 runtime-version: '51'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.golang
-command: axis-ip-tool
+command: ip-tool-for-axis
 
 finish-args:
   - --share=ipc
@@ -21,19 +21,18 @@ finish-args:
 build-options:
   append-path: /usr/lib/sdk/golang/bin
   env:
-    GOPATH: /run/build/axis-ip-tool/go
-    GOCACHE: /run/build/axis-ip-tool/go-cache
+    GOPATH: /run/build/ip-tool-for-axis/go
+    GOCACHE: /run/build/ip-tool-for-axis/go-cache
     GOTOOLCHAIN: local
 
 modules:
-  - name: axis-ip-tool
+  - name: ip-tool-for-axis
     buildsystem: simple
     build-options:
       build-args:
         - --share=network
     build-commands:
-      - go build -trimpath -ldflags '-s -w' -o build/axis-ip-tool ./cmd/axis-ip-tool
-      - CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o build/axisctl ./cmd/axisctl
+      - make build
       - make install-app PREFIX=/app DESTDIR=/
     sources:
       - type: dir

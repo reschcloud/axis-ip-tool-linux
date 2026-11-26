@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// axisctl – command line tool for finding and configuring Axis devices.
+// ip-tool-for-axis-cli – command line tool for finding and configuring Axis devices.
 package main
 
 import (
@@ -21,15 +21,15 @@ import (
 	"time"
 	"unsafe"
 
-	"axis-ip-tool/internal/axis"
+	"ip-tool-for-axis/internal/axis"
 )
 
 // version is set at build time (-ldflags "-X main.version=…", see Makefile).
 var version = "dev"
 
-const usage = `axisctl – find and configure Axis devices
+const usage = `ip-tool-for-axis-cli – find and configure Axis devices
 
-Usage: axisctl [--https-only] COMMAND …
+Usage: ip-tool-for-axis-cli [--https-only] COMMAND …
 
 Commands:
   list     [-t 5s]                                  Discover devices on the network
@@ -42,9 +42,9 @@ Commands:
                 [-ntp dhcp|off|SERVER,SERVER]       Set time zone/time/NTP
   restart  <ip>                                     Reboot
   reset    <ip> [-all] [-y]                         Factory defaults (-all: IP settings too)
-  batch    [DEVICE …] [-csv PLAN] …                 Configure several devices (axisctl batch -h)
+  batch    [DEVICE …] [-csv PLAN] …                 Configure several devices (ip-tool-for-axis-cli batch -h)
   firmware <ip> [-version V | -file F.bin]          Compare with axis.com / update firmware
-                [-factory none|soft|hard] [-y]      (axisctl firmware -h)
+                [-factory none|soft|hard] [-y]      (ip-tool-for-axis-cli firmware -h)
   ptz      <ip> [-zoom in|out] [-af] [-calibrate]   Show PTZ/lens capabilities, test zoom/AF/calibration
   version                                           Show version
 
@@ -54,7 +54,7 @@ Connection: HTTPS if the device offers it (certificate is not verified), otherwi
 `
 
 func main() {
-	axis.UserAgent = "axisctl/" + version + " (axis-ip-tool)"
+	axis.UserAgent = "ip-tool-for-axis-cli/" + version
 	if v := os.Getenv("AXIS_HTTPS_ONLY"); v == "1" || v == "true" || v == "yes" {
 		axis.SetHTTPSOnly(true)
 	}
@@ -92,7 +92,7 @@ func main() {
 	case "firmware", "fw":
 		err = cmdFirmware(ctx, args)
 	case "version", "--version":
-		fmt.Println("axisctl", version)
+		fmt.Println("ip-tool-for-axis-cli", version)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
@@ -178,7 +178,7 @@ func cmdInfo(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("Connection:    %s\n", conn)
 	if needs, _ := axis.NewClient(ip, 80, "", "").NeedsInitialUser(ctx); needs {
-		fmt.Println("Status:        factory state, no password set yet (axisctl init)")
+		fmt.Println("Status:        factory state, no password set yet (ip-tool-for-axis-cli init)")
 		return nil
 	}
 	if c == nil {
@@ -389,7 +389,7 @@ func cmdTime(ctx context.Context, args []string) error {
 func cmdFirmware(ctx context.Context, args []string) error {
 	fs, user := authFlags("firmware")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: axisctl firmware <ip> [options]
+		fmt.Fprint(os.Stderr, `Usage: ip-tool-for-axis-cli firmware <ip> [options]
 
 Without -version/-file: shows the installed firmware and the versions on axis.com.
 Downloading from axis.com needs a My Axis sign-in: sign in once in the GUI
@@ -526,7 +526,7 @@ axis_connect_session_sid cookie of www.axis.com.
 		return nil
 	}
 	if *factory == axis.FactoryDefaultSoft {
-		fmt.Println("Factory reset: the device has no password afterwards (axisctl init) – not waiting for it.")
+		fmt.Println("Factory reset: the device has no password afterwards (ip-tool-for-axis-cli init) – not waiting for it.")
 		return nil
 	}
 	err = c.WaitForUpgrade(ctx, info.Firmware, newVer, func(s axis.UpgradeStage) {
@@ -695,7 +695,7 @@ func authFlags(name string) (*flag.FlagSet, *string) {
 	return fs, fs.String("u", "root", "user name")
 }
 
-// reorder allows flags after the IP too ("axisctl net 1.2.3.4 -dhcp").
+// reorder allows flags after the IP too ("ip-tool-for-axis-cli net 1.2.3.4 -dhcp").
 func reorder(args []string) []string {
 	var flags, pos []string
 	for i := 0; i < len(args); i++ {

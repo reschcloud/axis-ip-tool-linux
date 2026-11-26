@@ -30,7 +30,7 @@ func settingsPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "axis-ip-tool", "settings.json"), nil
+	return filepath.Join(dir, "ip-tool-for-axis", "settings.json"), nil
 }
 
 func loadSettings() (settings, error) {

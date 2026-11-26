@@ -13,12 +13,12 @@ import (
 	"sync"
 	"text/tabwriter"
 
-	"axis-ip-tool/internal/axis"
+	"ip-tool-for-axis/internal/axis"
 )
 
-const batchUsage = `axisctl batch – configure several devices one after another
+const batchUsage = `ip-tool-for-axis-cli batch – configure several devices one after another
 
-Usage: axisctl batch [options] [DEVICE …]
+Usage: ip-tool-for-axis-cli batch [options] [DEVICE …]
   DEVICE = serial number or current IP. None given: all devices from -csv.
 
 Access:
@@ -125,7 +125,7 @@ func cmdBatch(ctx context.Context, args []string) error {
 		}
 	}
 	if !s.SetNetwork && !s.SetNTP && s.TimeZone == "" && s.HostnamePattern == "" && plan == nil && !s.InitPassword {
-		return errors.New("nothing to do – see axisctl batch -h")
+		return errors.New("nothing to do – see ip-tool-for-axis-cli batch -h")
 	}
 
 	fmt.Fprintln(os.Stderr, "Discovering devices …")

@@ -1,4 +1,4 @@
-module axis-ip-tool
+module ip-tool-for-axis
 
 go 1.24.0
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Axis IP Tool – installation with one command
+# IP Tool for AXIS (Linux) – installation with one command
 #
 #   curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/download/install.sh | sh
 #
@@ -8,9 +8,10 @@
 #   --flatpak       Flatpak instead of system package (default on Silverblue/Bazzite & co.)
 set -eu
 
-REPO="${AXIS_IP_TOOL_REPO:-reschcloud/axis-ip-tool-linux}"
+REPO="${IP_TOOL_FOR_AXIS_REPO:-reschcloud/axis-ip-tool-linux}"
 BASE="https://github.com/$REPO/releases/latest/download"
-APP_ID=io.github.reschcloud.AxisIpTool
+APP_ID=io.github.reschcloud.IPToolForAXIS
+PKG=ip-tool-for-axis
 
 mode=install app=pkg
 for a in "$@"; do
@@ -43,11 +44,11 @@ fi
 
 # ---------------------------------------------------------------- Uninstall
 if [ "$mode" = uninstall ]; then
-  say "Removing Axis IP Tool …"
+  say "Removing IP Tool for AXIS (Linux) …"
   case $fam in
-    dnf)    $SUDO dnf remove -y axis-ip-tool || true ;;
-    apt)    $SUDO apt-get remove -y axis-ip-tool || true ;;
-    pacman) $SUDO pacman -R --noconfirm axis-ip-tool || true ;;
+    dnf)    $SUDO dnf remove -y "$PKG" || true ;;
+    apt)    $SUDO apt-get remove -y "$PKG" || true ;;
+    pacman) $SUDO pacman -R --noconfirm "$PKG" || true ;;
   esac
   if command -v flatpak >/dev/null && flatpak info "$APP_ID" >/dev/null 2>&1; then
     flatpak uninstall -y "$APP_ID" || true
@@ -78,13 +79,13 @@ else
     apt)    ext=$debarch.deb ;;
     pacman) ext=$arch.pkg.tar.zst ;;
   esac
-  get "axis-ip-tool.$ext"
+  get "$PKG.$ext"
   say "Installing package (administrator password required) …"
   case $fam in
-    dnf)    $SUDO dnf install -y "$tmp/axis-ip-tool.$ext" ;;
-    apt)    $SUDO apt-get install -y "$tmp/axis-ip-tool.$ext" ;;
-    pacman) $SUDO pacman -U --noconfirm "$tmp/axis-ip-tool.$ext" ;;
+    dnf)    $SUDO dnf install -y "$tmp/$PKG.$ext" ;;
+    apt)    $SUDO apt-get install -y "$tmp/$PKG.$ext" ;;
+    pacman) $SUDO pacman -U --noconfirm "$tmp/$PKG.$ext" ;;
   esac
 fi
 
-say "Done! Axis IP Tool is now in the app menu."
+say "Done! IP Tool for AXIS (Linux) is now in the app menu."

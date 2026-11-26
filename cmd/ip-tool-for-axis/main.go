@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// axis-ip-tool – GNOME app for finding Axis devices and doing their basic configuration,
+// ip-tool-for-axis – GNOME app for finding Axis devices and doing their basic configuration,
 // modeled on the AXIS IP Utility.
 package main
 
@@ -9,26 +9,31 @@ import (
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
+	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
-	"axis-ip-tool/internal/axis"
+	"ip-tool-for-axis/internal/axis"
 )
 
-const appID = "io.github.reschcloud.AxisIpTool"
+const (
+	appID   = "io.github.reschcloud.IPToolForAXIS"
+	appName = "IP Tool for AXIS (Linux)"
+)
 
 // version is set at build time (-ldflags "-X main.version=…", see Makefile).
 var version = "dev"
 
 func main() {
-	axis.UserAgent = "axis-ip-tool/" + version
+	axis.UserAgent = "ip-tool-for-axis/" + version
 	if s, err := loadSettings(); err == nil {
 		axis.SetHTTPSOnly(s.HTTPSOnly)
 	}
 	flags := gio.ApplicationFlagsNone
-	shot := os.Getenv("AXIS_IP_TOOL_SCREENSHOT")
+	shot := os.Getenv("IP_TOOL_FOR_AXIS_SCREENSHOT")
 	if shot != "" {
 		flags = gio.ApplicationNonUnique // separate instance even if the app is already running
 	}
+	glib.SetApplicationName(appName)
 	app := adw.NewApplication(appID, flags)
 
 	about := gio.NewSimpleAction("about", nil)
@@ -59,7 +64,7 @@ func main() {
 
 func showAbout(app *adw.Application) {
 	d := adw.NewAboutDialog()
-	d.SetApplicationName("Axis IP Tool")
+	d.SetApplicationName(appName)
 	d.SetApplicationIcon(appID)
 	d.SetVersion(version)
 	d.SetComments("Find Axis devices on the network and do their basic configuration – " +

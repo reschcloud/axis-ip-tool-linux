@@ -16,7 +16,7 @@ import (
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
-	"axis-ip-tool/internal/axis"
+	"ip-tool-for-axis/internal/axis"
 )
 
 // Firmware update: compare with the AXIS OS versions on axis.com, download (My Axis
@@ -222,7 +222,7 @@ func (w *window) onFirmware() {
 	f.dlg.add(note("The device verifies the firmware signature before installing it. " +
 		"Installing and restarting takes several minutes; keep the device powered. " +
 		"Downloads are verified with the SHA-256 checksum from axis.com and kept in " +
-		"~/.cache/axis-ip-tool/firmware."))
+		"~/.cache/ip-tool-for-axis/firmware."))
 
 	for _, r := range f.rows {
 		if _, ok := w.creds[r.key]; ok {

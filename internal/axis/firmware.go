@@ -33,7 +33,7 @@ var AxisSite = "https://www.axis.com"
 // UserAgent is sent to axis.com (set by the programs to include their version). An own
 // user agent on purpose: axis.com serves protected files without sign-in to some
 // generic clients – this tool always goes through the My Axis sign-in as intended.
-var UserAgent = "axis-ip-tool"
+var UserAgent = "ip-tool-for-axis"
 
 // MyAxisCookie is the name of the My Axis session cookie.
 const MyAxisCookie = "axis_connect_session_sid"
@@ -452,13 +452,13 @@ func validCookieValue(s string) bool {
 	return true
 }
 
-// FirmwareCacheDir is where downloaded firmware is kept (~/.cache/axis-ip-tool/firmware).
+// FirmwareCacheDir is where downloaded firmware is kept (~/.cache/ip-tool-for-axis/firmware).
 func FirmwareCacheDir() (string, error) {
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "axis-ip-tool", "firmware"), nil
+	return filepath.Join(dir, "ip-tool-for-axis", "firmware"), nil
 }
 
 // Download fetches the firmware into the cache (or uses the cached copy) and verifies
@@ -579,7 +579,7 @@ func myAxisSessionPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "axis-ip-tool", "myaxis-session.json"), nil
+	return filepath.Join(dir, "ip-tool-for-axis", "myaxis-session.json"), nil
 }
 
 // LoadMyAxisSession reads the stored session; $AXIS_MYAXIS_SESSION takes precedence.

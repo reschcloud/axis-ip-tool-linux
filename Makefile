@@ -1,4 +1,4 @@
-# Axis IP Tool
+# IP Tool for AXIS (Linux)
 #
 #   make                 build everything (the GUI needs gtk4 and libadwaita development packages)
 #   sudo make install    install (GUI, CLI)
@@ -13,8 +13,8 @@ DESTDIR ?=
 BUILDFLAGS := -trimpath
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-APP_ID  := io.github.reschcloud.AxisIpTool
-BIN     := build/axis-ip-tool build/axisctl
+APP_ID  := io.github.reschcloud.IPToolForAXIS
+BIN     := build/ip-tool-for-axis build/ip-tool-for-axis-cli
 
 .PHONY: all build gui cli test install install-app uninstall \
         packages flatpak clean
@@ -22,24 +22,24 @@ BIN     := build/axis-ip-tool build/axisctl
 all: build
 build: $(BIN)
 
-build/axis-ip-tool: $(shell find cmd/axis-ip-tool internal -name '*.go') go.mod
-	go build $(BUILDFLAGS) -ldflags '$(LDFLAGS)' -o $@ ./cmd/axis-ip-tool
+build/ip-tool-for-axis: $(shell find cmd/ip-tool-for-axis internal -name '*.go') go.mod
+	go build $(BUILDFLAGS) -ldflags '$(LDFLAGS)' -o $@ ./cmd/ip-tool-for-axis
 
-build/axisctl: $(shell find cmd/axisctl internal -name '*.go') go.mod
-	CGO_ENABLED=0 go build $(BUILDFLAGS) -ldflags '$(LDFLAGS)' -o $@ ./cmd/axisctl
+build/ip-tool-for-axis-cli: $(shell find cmd/ip-tool-for-axis-cli internal -name '*.go') go.mod
+	CGO_ENABLED=0 go build $(BUILDFLAGS) -ldflags '$(LDFLAGS)' -o $@ ./cmd/ip-tool-for-axis-cli
 
-gui: build/axis-ip-tool
-cli: build/axisctl
+gui: build/ip-tool-for-axis
+cli: build/ip-tool-for-axis-cli
 
 test:
-	go vet ./internal/... ./cmd/axisctl
+	go vet ./internal/... ./cmd/ip-tool-for-axis-cli
 	go test ./internal/...
 
 install: install-app
 
-install-app: build/axis-ip-tool build/axisctl
-	install -Dm755 build/axis-ip-tool $(DESTDIR)$(PREFIX)/bin/axis-ip-tool
-	install -Dm755 build/axisctl      $(DESTDIR)$(PREFIX)/bin/axisctl
+install-app: $(BIN)
+	install -Dm755 build/ip-tool-for-axis     $(DESTDIR)$(PREFIX)/bin/ip-tool-for-axis
+	install -Dm755 build/ip-tool-for-axis-cli $(DESTDIR)$(PREFIX)/bin/ip-tool-for-axis-cli
 	install -Dm644 data/$(APP_ID).desktop       $(DESTDIR)$(PREFIX)/share/applications/$(APP_ID).desktop
 	install -Dm644 data/$(APP_ID).metainfo.xml  $(DESTDIR)$(PREFIX)/share/metainfo/$(APP_ID).metainfo.xml
 	install -Dm644 data/icons/hicolor/scalable/apps/$(APP_ID).svg \
@@ -49,7 +49,7 @@ install-app: build/axis-ip-tool build/axisctl
 	@[ -n "$(DESTDIR)" ] || sh packaging/scripts/app-postinstall.sh
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/axis-ip-tool $(DESTDIR)$(PREFIX)/bin/axisctl \
+	rm -f $(DESTDIR)$(PREFIX)/bin/ip-tool-for-axis $(DESTDIR)$(PREFIX)/bin/ip-tool-for-axis-cli \
 	      $(DESTDIR)$(PREFIX)/share/applications/$(APP_ID).desktop \
 	      $(DESTDIR)$(PREFIX)/share/metainfo/$(APP_ID).metainfo.xml \
 	      $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(APP_ID).svg \

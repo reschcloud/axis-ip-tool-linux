@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.reschcloud.AxisIpTool</id>
-  <name>Axis IP Tool</name>
+  <id>io.github.reschcloud.IPToolForAXIS</id>
+  <name>IP Tool for AXIS (Linux)</name>
   <summary>Find and set up Axis network cameras</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>AGPL-3.0-or-later</project_license>
   <developer id="io.github.reschcloud">
-    <name>Axis IP Tool contributors</name>
+    <name>IP Tool for AXIS contributors</name>
   </developer>
   <description>
     <p>Finds Axis devices on the local network (Bonjour/mDNS and SSDP) and performs the basic
@@ -30,10 +30,10 @@
   </screenshots>
   <url type="homepage">https://github.com/reschcloud/axis-ip-tool-linux</url>
   <url type="bugtracker">https://github.com/reschcloud/axis-ip-tool-linux/issues</url>
-  <launchable type="desktop-id">io.github.reschcloud.AxisIpTool.desktop</launchable>
+  <launchable type="desktop-id">io.github.reschcloud.IPToolForAXIS.desktop</launchable>
   <provides>
-    <binary>axis-ip-tool</binary>
-    <binary>axisctl</binary>
+    <binary>ip-tool-for-axis</binary>
+    <binary>ip-tool-for-axis-cli</binary>
   </provides>
   <categories>
     <category>Network</category>

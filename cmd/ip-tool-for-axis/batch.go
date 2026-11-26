@@ -18,7 +18,7 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/diamondburned/gotk4/pkg/pango"
 
-	"axis-ip-tool/internal/axis"
+	"ip-tool-for-axis/internal/axis"
 )
 
 // Batch configuration: settings → preview (editable) → execution.

@@ -70,9 +70,9 @@ jobs:
           make packages
           # fixed names so that install.sh can use "latest/download/…"
           cd dist
-          mv axis-ip-tool-*.${{ matrix.arch }}.rpm          axis-ip-tool.${{ matrix.arch }}.rpm
-          mv axis-ip-tool_*_${{ matrix.debarch }}.deb       axis-ip-tool.${{ matrix.debarch }}.deb
-          mv axis-ip-tool-*-${{ matrix.arch }}.pkg.tar.zst  axis-ip-tool.${{ matrix.arch }}.pkg.tar.zst
+          mv ip-tool-for-axis-*.${{ matrix.arch }}.rpm          ip-tool-for-axis.${{ matrix.arch }}.rpm
+          mv ip-tool-for-axis_*_${{ matrix.debarch }}.deb       ip-tool-for-axis.${{ matrix.debarch }}.deb
+          mv ip-tool-for-axis-*-${{ matrix.arch }}.pkg.tar.zst  ip-tool-for-axis.${{ matrix.arch }}.pkg.tar.zst
           ls -l
 
       - uses: actions/upload-artifact@v7
@@ -97,10 +97,12 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # Flatpak's make build also derives the app version from Git tags
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: io.github.reschcloud.AxisIpTool.${{ matrix.arch }}.flatpak
-          manifest-path: packaging/io.github.reschcloud.AxisIpTool.yml
+          bundle: io.github.reschcloud.IPToolForAXIS.${{ matrix.arch }}.flatpak
+          manifest-path: packaging/io.github.reschcloud.IPToolForAXIS.yml
           arch: ${{ matrix.arch }}
           upload-artifact: true
 

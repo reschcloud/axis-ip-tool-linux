@@ -140,7 +140,7 @@ func TestMyAxisSessionStore(t *testing.T) {
 	if s, ok := LoadMyAxisSession(); !ok || s.Value != "abc123" {
 		t.Fatalf("load = %+v %v", s, ok)
 	}
-	if fi, _ := os.Stat(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "axis-ip-tool", "myaxis-session.json")); fi.Mode().Perm() != 0o600 {
+	if fi, _ := os.Stat(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "ip-tool-for-axis", "myaxis-session.json")); fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %v", fi.Mode())
 	}
 	t.Setenv("AXIS_MYAXIS_SESSION", MyAxisCookie+"=fromenv")

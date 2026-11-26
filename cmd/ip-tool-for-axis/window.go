@@ -19,7 +19,7 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/diamondburned/gotk4/pkg/pango"
 
-	"axis-ip-tool/internal/axis"
+	"ip-tool-for-axis/internal/axis"
 )
 
 type glibVariant = glib.Variant
@@ -101,7 +101,7 @@ func newWindow(app *adw.Application) *window {
 		fwCheck:           firmwareCheckEnabled(),
 		infoAt:            map[string]time.Time{},
 	}
-	w.SetTitle("Axis IP Tool")
+	w.SetTitle(appName)
 	w.SetDefaultSize(1400, 640)
 	glib.TimeoutAdd(1000, func() bool { w.tick(); return true })
 	w.build()
@@ -152,12 +152,13 @@ func (w *window) build() {
 	menu.Append("Use HTTPS only", "win.https-only")
 	menu.Append("Check axis.com for firmware updates", "win.fw-check")
 	menu.Append("Forget stored credentials", "win.forget")
-	menu.Append("About Axis IP Tool", "app.about")
+	menu.Append("About "+appName, "app.about")
 	mb := gtk.NewMenuButton()
 	mb.SetIconName("open-menu-symbolic")
 	mb.SetMenuModel(menu)
 	mb.SetPrimary(true)
 	hb.PackEnd(mb)
+	hb.PackEnd(w.appUpdateButton())
 	tv.AddTopBar(hb)
 
 	// table

@@ -8,7 +8,7 @@ import (
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 
-	"axis-ip-tool/internal/axis"
+	"ip-tool-for-axis/internal/axis"
 )
 
 // Commissioning: power line frequency and mounting position (like the setup wizard of

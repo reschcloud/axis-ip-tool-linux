@@ -289,7 +289,7 @@ func (c *Client) jsonCall(ctx context.Context, cgi, method string, params any, a
 func (c *Client) jsonCallVersion(ctx context.Context, cgi, version, method string, params any, auth bool, out any) error {
 	// "context" is optional according to VAPIX, but some firmware (e.g. P3225-VE Mk II)
 	// rejects systemready.cgi without it with "Invalid POST data".
-	req := map[string]any{"apiVersion": version, "context": "axis-ip-tool", "method": method}
+	req := map[string]any{"apiVersion": version, "context": "ip-tool-for-axis", "method": method}
 	if params != nil {
 		req["params"] = params
 	}

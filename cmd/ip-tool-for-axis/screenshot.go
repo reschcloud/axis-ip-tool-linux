@@ -2,7 +2,7 @@
 
 package main
 
-// Developer option for README screenshots: AXIS_IP_TOOL_SCREENSHOT=file.png renders the
+// Developer option for README screenshots: IP_TOOL_FOR_AXIS_SCREENSHOT=file.png renders the
 // window into a PNG file after a few seconds and quits. GNOME doesn't let other programs
 // take screenshots, and gotk4 can't pass render nodes – hence directly via the C API.
 

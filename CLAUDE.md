@@ -1,4 +1,4 @@
-# CLAUDE.md – Axis IP Tool
+# CLAUDE.md – IP Tool for AXIS (Linux)
 
 GNOME app + CLI for finding Axis cameras and doing their basic configuration (model: AXIS IP Utility).
 Language for UI texts, code comments, docs and commit messages: **English** (switched from German
@@ -13,14 +13,14 @@ make gui|cli         # single binaries
 sudo make install    # to /usr
 make packages        # rpm/deb/arch into dist/ (needs nfpm)
 make flatpak         # Flatpak bundle into dist/
-./build/axisctl list -t 5
-AXIS_IP_TOOL_SCREENSHOT=$PWD/data/screenshots/main-window.png ./build/axis-ip-tool   # README screenshot
+./build/ip-tool-for-axis-cli list -t 5
+IP_TOOL_FOR_AXIS_SCREENSHOT=$PWD/data/screenshots/main-window.png ./build/ip-tool-for-axis   # README screenshot
 ```
 
 GUI build dependencies: `gtk4-devel libadwaita-devel gobject-introspection-devel` (Fedora)
 or `libgtk-4-dev libadwaita-1-dev libgirepository1.0-dev` (Debian/Ubuntu).
 **The first GUI build takes 10–15 minutes** (cgo bindings for GTK); it's cached afterwards.
-`axisctl` is pure Go (`CGO_ENABLED=0`) and builds in seconds.
+`ip-tool-for-axis-cli` is pure Go (`CGO_ENABLED=0`) and builds in seconds.
 Caution: `go build` without `-trimpath` has its own cache → GTK bindings get rebuilt.
 Always use `make gui` for quick checks.
 
@@ -37,7 +37,7 @@ Always use `make gui` for quick checks.
     Protocol: `ProbeHTTPS` (TLS handshake on 443, cached for `CheckInterval`) → HTTPS, otherwise
     HTTP port; `SetHTTPSOnly(true)` → `ErrNoHTTPS` instead of fallback. Certificates are
     deliberately NOT verified and not pinned either (user's decision).
-- `cmd/axis-ip-tool`: GUI. List = `gtk.StringList` of device keys → filter/sort models →
+- `cmd/ip-tool-for-axis`: GUI. List = `gtk.StringList` of device keys → filter/sort models →
   `ColumnView`. Cells are updated live via `window.cells` (bound labels per key) without model
   changes (selection is kept). Status cell "Not logged in"/"Wrong password" is clickable → `unlock()`.
   Network calls always in goroutines, back to the GTK thread via `glib.IdleAdd`
@@ -46,8 +46,8 @@ Always use `make gui` for quick checks.
   IPs/gateway/network/broadcast, hostname pattern: `#` number, `##` two digits, `@` last IP octet),
   `CheckAssignments` (after manual edits), `ParsePlanCSV` (English and German headers)/`ApplyPlan`,
   `AddressInUse` (TCP 80/443), `RunBatch` (sequential, IP last, errors don't stop the rest).
-  GUI: `cmd/axis-ip-tool/batch.go` (wizard with `adw.NavigationView`), CLI: `axisctl batch`.
-- `cmd/axisctl`: CLI with subcommands; password from `$AXIS_PASSWORD` or terminal prompt.
+  GUI: `cmd/ip-tool-for-axis/batch.go` (wizard with `adw.NavigationView`), CLI: `ip-tool-for-axis-cli batch`.
+- `cmd/ip-tool-for-axis-cli`: CLI with subcommands; password from `$AXIS_PASSWORD` or terminal prompt.
 - Firmware update (modeled on github.com/Cacsjep/oadm, Apache-2.0 – only the approach, no code):
   `internal/axis/firmware.go`: catalog = public HTML listings `axis.com/ftp/pub_soft/{MPQT,PACS}/
   <Product>/<12_11_77>/` (regex parser, name/size/SHA-256), model match via normalized
@@ -58,12 +58,12 @@ Always use `make gui` for quick checks.
   `Go-http-client` UA *without* login – don't rely on/exploit that.
   `fwmgr.go`: `firmwaremanagement.cgi` apiVersion 1.0 `status`/`upgrade` (multipart json+file,
   streamed via `sendBody`, status call first primes digest), `WaitForUpgrade` polls BasicInfo.
-  Session stored in `~/.config/axis-ip-tool/myaxis-session.json` (0600) or `$AXIS_MYAXIS_SESSION`.
-  GUI: `cmd/axis-ip-tool/firmware.go` (dialog for 1…n devices, list hint `fwHints` in the
+  Session stored in `~/.config/ip-tool-for-axis/myaxis-session.json` (0600) or `$AXIS_MYAXIS_SESSION`.
+  GUI: `cmd/ip-tool-for-axis/firmware.go` (dialog for 1…n devices, list hint `fwHints` in the
   firmware column), `myaxis.go`: My Axis sign-in with **WebKitGTK 6.0 loaded via dlopen**
   (no build dependency; packages only "recommend" it), reads the cookie via the cookie manager.
-  CLI: `axisctl firmware`.
-- Live view (`cmd/axis-ip-tool/liveview.go`): MJPEG via `Client.Stream` (`stream.go`, own
+  CLI: `ip-tool-for-axis-cli firmware`.
+- Live view (`cmd/ip-tool-for-axis/liveview.go`): MJPEG via `Client.Stream` (`stream.go`, own
   multipart parser using Content-Length – `mime/multipart` delivers a frame only when the next
   boundary arrives; no 8 s client timeout), fallback snapshot polling on `ErrNotSupported`.
   Fixed sidebar (no toggle), capabilities are loaded together with the first snapshot
@@ -89,13 +89,13 @@ Always use `make gui` for quick checks.
 - `go.mod` contains `replace` directives to the GitHub mirrors of `golang.org/x/*` and
   `go4.org/…` (the development environment had no access to proxy.golang.org). They are
   harmless; remove them and run `go mod tidy` if you like.
-- App ID: `io.github.reschcloud.AxisIpTool`, repo `github.com/reschcloud/axis-ip-tool-linux`
+- App ID: `io.github.reschcloud.IPToolForAXIS`, repo `github.com/reschcloud/axis-ip-tool-linux`
   (file names in `data/`, `packaging/`, constant in `main.go`, `APP_ID` in Makefile/install.sh).
   License: AGPL-3.0-or-later (since v0.3.0; before GPL-3.0-or-later).
-- Packages: one package `axis-ip-tool` (GUI + CLI) for x86_64 and arm64. Release builds natively
+- Packages: one package `ip-tool-for-axis` (GUI + CLI) for x86_64 and arm64. Release builds natively
   on Ubuntu 24.04 (`ubuntu-24.04` / `ubuntu-24.04-arm`, oldest glibc), so they also run on
   Fedora ≥ 40 and Arch. nfpm architecture comes from `$ARCH` (Makefile: `go env GOARCH`).
-  Release files have fixed names (`axis-ip-tool.<arch>.rpm` etc.) that `install.sh` expects.
+  Release files have fixed names (`ip-tool-for-axis.<arch>.rpm` etc.) that `install.sh` expects.
   openSUSE: dependency package names don't match (nfpm rpm uses Fedora names) → build from source.
   Metainfo screenshot URL points to the tag (`raw.githubusercontent.com/…/vX.Y.Z/…`) – update per release.
 - Some firmware (seen on P3225-VE Mk II, 9.80.49 – there already in factory state) answers
@@ -148,7 +148,7 @@ Always use `make gui` for quick checks.
   → "Logged in" (`Unlocked`) or "Wrong password" (`AuthFailed`, set on every `ErrAuth`, GUI:
   `window.setAuth`).
 - **ARP/ping IP assignment was removed for now on 2026-11-17** (system helper, D-Bus service,
-  polkit, `internal/arpping`, `axisctl assign`). Re-implement if needed.
+  polkit, `internal/arpping`, the old `axisctl assign` command). Re-implement if needed.
 
 ## Test status
 
@@ -158,10 +158,10 @@ Tested (Ubuntu 24.04 container, Xvfb, fake cameras as Python HTTP servers + `ava
   selection/netlink parsing, forwarder.
 - Real cameras AXIS P3225-VE Mk II (firmware 9.80.49) and Q2101-TE (AXIS OS 11.11): discovery,
   initial password, locked detection, HTTPS detection. P3225 (2026-11-18): factory state
-  detection, `axisctl init` with power line frequency/mounting position, `axisctl reset`, IPv6
+  detection, CLI `init` with power line frequency/mounting position, CLI `reset`, IPv6
   detection via neighbor table + forwarding to the link-local address (without GUI click),
   ping/status stable over several check cycles.
-- `axisctl list` finds devices announced via Avahi and enriches them.
+- `ip-tool-for-axis-cli list` finds devices announced via Avahi and enriches them.
 - GUI: list, status, password dialog (creates user), network dialog loads the configuration;
   English UI rendered for the README screenshot.
 
@@ -171,7 +171,7 @@ going offline (unplugging a camera) in the GUI, double-click IPv6 in the GUI.
 Live view MJPEG stream, PTZ (`ptz.cgi`) and optics control/lens calibration
 (`opticscontrol.cgi`) only against the fake camera – not yet on real devices.
 P3225-VE Mk II (9.80.132, 2026-11-19): lens via `opticssetup.cgi` tested – detection, zoom
-(absolute/steps), focus, autofocus, calibration (~50 s) via `axisctl ptz -zoom/-af/-calibrate`;
+  (absolute/steps), focus, autofocus, calibration (~50 s) via the CLI's `ptz -zoom/-af/-calibrate`;
 GUI live view on that device not yet clicked through.
 
 ## Open points / ideas
@@ -184,6 +184,6 @@ GUI live view on that device not yet clicked through.
    Idea: preview image per device in the preview table; restart for several.
 6. Firmware update implemented (see above) – untested on real cameras and with a real
    My Axis account (only fake camera/fake axis.com + real public listings; sign-in dialog only
-   smoke-tested). (Factory reset implemented: `FactoryReset`, GUI "Reset", `axisctl reset`;
+   smoke-tested). (Factory reset implemented: `FactoryReset`, GUI "Reset", CLI `reset`;
    tested via CLI on P3225.) (NTP via `ntp.cgi` implemented, untested on P3225-VE Mk II.)
 7. Translations (gettext) – currently English only (was German until v0.2.0).

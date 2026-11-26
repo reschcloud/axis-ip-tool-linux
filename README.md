@@ -1,4 +1,4 @@
-# Axis IP Tool
+# IP Tool for AXIS (Linux)
 
 GNOME app and command line tool for finding Axis network cameras and doing their basic
 configuration – modeled on the **AXIS IP Utility**.
@@ -44,7 +44,7 @@ curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/down
 ```
 
 **Manually:** download the package from the release page and install it, e.g.
-`sudo dnf install ./axis-ip-tool*.rpm` or `sudo apt install ./axis-ip-tool*.deb`.
+`sudo dnf install ./ip-tool-for-axis*.rpm` or `sudo apt install ./ip-tool-for-axis*.deb`.
 The package manager pulls in the dependencies (GTK 4, libadwaita ≥ 1.5).
 
 **From source:**
@@ -59,9 +59,11 @@ sudo make uninstall
 
 ## Updating
 
-The app doesn't update itself. Menu → "About Axis IP Tool" or `axisctl version` shows the
-installed version; new versions are on the
-[release page](https://github.com/reschcloud/axis-ip-tool-linux/releases).
+At startup, the app checks GitHub for a newer stable release. If one is available, a small
+**Update available** button beside the app menu opens its release page. The app doesn't update
+itself. Find the installed version under Menu → "About IP Tool for AXIS (Linux)" or with
+`ip-tool-for-axis-cli version`.
+You can also browse the [release history](https://github.com/reschcloud/axis-ip-tool-linux/releases).
 
 **Installed with the install command** (package or Flatpak): just run the same command again –
 it downloads the latest version and replaces the installed one:
@@ -71,8 +73,9 @@ curl -fsSL https://github.com/reschcloud/axis-ip-tool-linux/releases/latest/down
 ```
 
 **Installed manually:** download the new package from the release page and install it the same
-way as the first time (`sudo dnf install ./axis-ip-tool*.rpm`, `sudo apt install ./axis-ip-tool*.deb`
-or `sudo pacman -U ./axis-ip-tool*.pkg.tar.zst`) – the package manager replaces the old version.
+way as the first time (`sudo dnf install ./ip-tool-for-axis*.rpm`, `sudo apt install ./ip-tool-for-axis*.deb`
+or `sudo pacman -U ./ip-tool-for-axis*.pkg.tar.zst`) – the package manager replaces the old version
+when the package name matches.
 
 **From source:**
 
@@ -82,23 +85,34 @@ make
 sudo make install
 ```
 
+### Moving from the old package
+
+The new package (`ip-tool-for-axis`) and Flatpak ID (`io.github.reschcloud.IPToolForAXIS`) do not
+replace the old `axis-ip-tool` package or `io.github.reschcloud.AxisIpTool` Flatpak automatically.
+Remove the old installation separately if you no longer need it. Scripts that used `axisctl`
+should call `ip-tool-for-axis-cli` instead.
+
+To keep your preferences, close both apps and copy `settings.json` from the old `axis-ip-tool/`
+config directory to the new `ip-tool-for-axis/` directory (`~/.config` by default; Flatpak uses
+`~/.var/app/<app-id>/config` for each app ID). Sign in to My Axis again if you use firmware downloads.
+
 ## Command line
 
 ```sh
-axisctl list                                   # discover devices
-axisctl init 192.168.0.90                      # create the first admin (50 Hz, ceiling mount)
-axisctl init 192.168.0.90 -freq 60 -mount wall # … with other commissioning settings
-axisctl net 192.168.0.90 -ip 10.0.0.20/24 -gw 10.0.0.1 -hostname camera-yard
-axisctl time 192.168.0.90 -tz Europe/Vienna -ntp pool.ntp.org
-axisctl reset 192.168.0.90                     # factory defaults (IP is kept; -all: IP too)
+ip-tool-for-axis-cli list                     # discover devices
+ip-tool-for-axis-cli init 192.168.0.90        # create the first admin (50 Hz, ceiling mount)
+ip-tool-for-axis-cli init 192.168.0.90 -freq 60 -mount wall
+ip-tool-for-axis-cli net 192.168.0.90 -ip 10.0.0.20/24 -gw 10.0.0.1 -hostname camera-yard
+ip-tool-for-axis-cli time 192.168.0.90 -tz Europe/Vienna -ntp pool.ntp.org
+ip-tool-for-axis-cli reset 192.168.0.90       # factory defaults (IP is kept; -all: IP too)
 
 # Several cameras: sequential IPs from .20, hostnames camera-01, camera-02 …
-axisctl batch -init -ip 10.0.0.20/24 -gw 10.0.0.1 -hostname 'camera-##' \
-              -ntp pool.ntp.org ACCC8E000001 ACCC8E000002 ACCC8E000003
-axisctl batch -ip 10.0.0.1/24 -csv plan.csv -dry-run   # assignment from CSV, show only
-axisctl firmware 192.168.0.90                  # compare installed firmware with axis.com
-axisctl firmware 192.168.0.90 -version track   # update to the newest version of its track
-axisctl firmware 192.168.0.90 -file P3225-VE_Mk_II_9_80_132.bin   # local file
+ip-tool-for-axis-cli batch -init -ip 10.0.0.20/24 -gw 10.0.0.1 -hostname 'camera-##' \
+    -ntp pool.ntp.org ACCC8E000001 ACCC8E000002 ACCC8E000003
+ip-tool-for-axis-cli batch -ip 10.0.0.1/24 -csv plan.csv -dry-run   # preview CSV plan
+ip-tool-for-axis-cli firmware 192.168.0.90                        # compare with axis.com
+ip-tool-for-axis-cli firmware 192.168.0.90 -version track         # update within the track
+ip-tool-for-axis-cli firmware 192.168.0.90 -file P3225-VE_Mk_II_9_80_132.bin
 ```
 
 ### Batch configuration
@@ -124,11 +138,11 @@ ACCC8E000002;10.0.0.21;camera-yard
 ## Structure
 
 ```
-cmd/axis-ip-tool     GNOME app (Go, gotk4 + libadwaita)
-cmd/axisctl          CLI (pure Go)
-internal/axis        discovery, VAPIX client, data model
-data/                desktop file, metainfo, icons, screenshots
-packaging/           nfpm configuration, Flatpak manifest, install.sh, package scripts
+cmd/ip-tool-for-axis      GNOME app (Go, gotk4 + libadwaita)
+cmd/ip-tool-for-axis-cli  CLI (pure Go)
+internal/axis             discovery, VAPIX client, data model
+data/                     desktop file, metainfo, icons, screenshots
+packaging/                nfpm configuration, Flatpak manifest, install.sh, package scripts
 ```
 
 ## Notes
@@ -141,16 +155,16 @@ packaging/           nfpm configuration, Flatpak manifest, install.sh, package s
 - Communication with the cameras uses **HTTPS** if the device offers it, otherwise HTTP
   (column "Connection"). The cameras' self-signed certificates are accepted without
   verification: encrypted, but no protection against an active attacker on the network.
-  Menu → "Use HTTPS only" or `axisctl --https-only` forbids the fallback to HTTP.
+  Menu → "Use HTTPS only" or `ip-tool-for-axis-cli --https-only` forbids the fallback to HTTP.
 - **Firmware update:** the firmware column shows when axis.com has a newer version on the
   device's track (LTS tracks stay on their track; menu → "Check axis.com for firmware
   updates" turns this off). Downloading needs a free Axis account: "Firmware" → "Sign in"
   opens the Axis sign-in page in an embedded browser (WebKitGTK 6.0, optional package);
-  the app keeps only the session cookie (`~/.config/axis-ip-tool/myaxis-session.json`, mode
-  0600, valid for about four weeks), never the password. `axisctl` uses the same session or
+  the app keeps only the session cookie (`~/.config/ip-tool-for-axis/myaxis-session.json`, mode
+  0600, valid for about four weeks), never the password. `ip-tool-for-axis-cli` uses the same session or
   `$AXIS_MYAXIS_SESSION`. Downloads are checked against the SHA-256 from axis.com and cached
-  in `~/.cache/axis-ip-tool/firmware`; the device verifies the signature itself.
-- Screenshot for this README: `AXIS_IP_TOOL_SCREENSHOT=data/screenshots/main-window.png axis-ip-tool`
+  in `~/.cache/ip-tool-for-axis/firmware`; the device verifies the signature itself.
+- Screenshot for this README: `IP_TOOL_FOR_AXIS_SCREENSHOT=data/screenshots/main-window.png ip-tool-for-axis`
   renders the window after a few seconds and quits.
 
 ## License
