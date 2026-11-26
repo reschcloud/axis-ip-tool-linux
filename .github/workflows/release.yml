@@ -30,7 +30,7 @@ jobs:
         with:
           fetch-depth: 0 # tags for packaging/scripts/version.sh
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           # Latest stable Go, not the minimum from go.mod: the minimum (1.24.0) has known
           # vulnerabilities in the standard library (net/http …) that govulncheck reports,
