@@ -53,6 +53,7 @@ func main() {
 			return
 		}
 		w := newWindow(app)
+		w.SetIconName(appID)
 		w.Present()
 		if shot != "" {
 			w.SetDefaultSize(1400, 800)

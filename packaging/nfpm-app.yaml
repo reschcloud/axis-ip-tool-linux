@@ -25,8 +25,10 @@ contents:
     dst: /usr/share/applications/io.github.reschcloud.iptoolforaxis.desktop
   - src: data/io.github.reschcloud.iptoolforaxis.metainfo.xml
     dst: /usr/share/metainfo/io.github.reschcloud.iptoolforaxis.metainfo.xml
-  - src: data/icons/hicolor/scalable/apps/io.github.reschcloud.iptoolforaxis.svg
-    dst: /usr/share/icons/hicolor/scalable/apps/io.github.reschcloud.iptoolforaxis.svg
+  - src: data/icons/hicolor/128x128/apps/io.github.reschcloud.iptoolforaxis.png
+    dst: /usr/share/icons/hicolor/128x128/apps/io.github.reschcloud.iptoolforaxis.png
+  - src: data/icons/hicolor/256x256/apps/io.github.reschcloud.iptoolforaxis.png
+    dst: /usr/share/icons/hicolor/256x256/apps/io.github.reschcloud.iptoolforaxis.png
   - src: data/icons/hicolor/symbolic/apps/io.github.reschcloud.iptoolforaxis-symbolic.svg
     dst: /usr/share/icons/hicolor/symbolic/apps/io.github.reschcloud.iptoolforaxis-symbolic.svg
   - src: LICENSE

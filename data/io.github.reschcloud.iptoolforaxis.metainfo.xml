@@ -43,6 +43,11 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.1" date="2026-11-27">
+      <description>
+        <p>New application icon for the desktop launcher, application window, and About dialog.</p>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-11-27">
       <description>
         <p>Cameras can be added manually by address, hostname, URL, CIDR prefix, range or

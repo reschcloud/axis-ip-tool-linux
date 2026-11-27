@@ -39,8 +39,8 @@ The app ID was changed to lowercase reverse-DNS **before** the release:
   - `desktop-file-validate data/*.desktop`
   - `appstreamcli validate --no-net data/*.metainfo.xml`
   - The desktop category and AppStream category now match (`Network;`).
-- [ ] Confirm the icon meets Flathub expectations (scalable SVG is installed; optionally add a
-  256×256 PNG export).
+- [x] Install transparent 128×128 and 256×256 app icons in the `hicolor` theme under the app ID.
+  The symbolic SVG remains available separately.
 - [ ] Tag the release: `git tag -s v0.5.0`, push the tag, create the GitHub release with source
   tarball and its SHA256.
 

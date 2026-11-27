@@ -42,8 +42,10 @@ install-app: $(BIN)
 	install -Dm755 build/ip-tool-for-axis-cli $(DESTDIR)$(PREFIX)/bin/ip-tool-for-axis-cli
 	install -Dm644 data/$(APP_ID).desktop       $(DESTDIR)$(PREFIX)/share/applications/$(APP_ID).desktop
 	install -Dm644 data/$(APP_ID).metainfo.xml  $(DESTDIR)$(PREFIX)/share/metainfo/$(APP_ID).metainfo.xml
-	install -Dm644 data/icons/hicolor/scalable/apps/$(APP_ID).svg \
-		$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(APP_ID).svg
+	install -Dm644 data/icons/hicolor/128x128/apps/$(APP_ID).png \
+		$(DESTDIR)$(PREFIX)/share/icons/hicolor/128x128/apps/$(APP_ID).png
+	install -Dm644 data/icons/hicolor/256x256/apps/$(APP_ID).png \
+		$(DESTDIR)$(PREFIX)/share/icons/hicolor/256x256/apps/$(APP_ID).png
 	install -Dm644 data/icons/hicolor/symbolic/apps/$(APP_ID)-symbolic.svg \
 		$(DESTDIR)$(PREFIX)/share/icons/hicolor/symbolic/apps/$(APP_ID)-symbolic.svg
 	install -Dm644 LICENSE $(DESTDIR)$(PREFIX)/share/licenses/$(APP_ID)/LICENSE
@@ -54,6 +56,8 @@ uninstall:
 	      $(DESTDIR)$(PREFIX)/share/applications/$(APP_ID).desktop \
 	      $(DESTDIR)$(PREFIX)/share/metainfo/$(APP_ID).metainfo.xml \
 	      $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(APP_ID).svg \
+	      $(DESTDIR)$(PREFIX)/share/icons/hicolor/128x128/apps/$(APP_ID).png \
+	      $(DESTDIR)$(PREFIX)/share/icons/hicolor/256x256/apps/$(APP_ID).png \
 	      $(DESTDIR)$(PREFIX)/share/icons/hicolor/symbolic/apps/$(APP_ID)-symbolic.svg \
 	      $(DESTDIR)$(PREFIX)/share/licenses/$(APP_ID)/LICENSE
 	-sh packaging/scripts/app-postinstall.sh
