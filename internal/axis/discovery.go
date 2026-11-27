@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,12 +29,20 @@ import (
 
 var mdnsTypes = []string{"_axis-video._tcp", "_vapix-http._tcp"}
 
+// Discovery represents a running discovery. It stops when the context passed to
+// Discover is done.
+type Discovery struct {
+	d *discoverer
+}
+
 // Discover searches until ctx is done. found is called from arbitrary goroutines and
 // receives partial information to be combined with Device.Merge.
 // Errors of one discovery method are reported via warn, the other one keeps running.
-func Discover(ctx context.Context, found func(Device), warn func(error)) {
+// The returned Discovery accepts manual addresses that discovery didn't find.
+func Discover(ctx context.Context, found func(Device), warn func(error)) *Discovery {
 	d := &discoverer{ctx: ctx, found: found, enriched: map[string]time.Time{},
-		enriching: map[string]bool{}, ifaces: map[string]bool{}, targets: map[string]*target{}}
+		enriching: map[string]bool{}, ifaces: map[string]bool{}, targets: map[string]*target{},
+		enrichSem: make(chan struct{}, 16)}
 	if warn == nil {
 		warn = func(error) {}
 	}
@@ -57,17 +66,43 @@ func Discover(ctx context.Context, found func(Device), warn func(error)) {
 	}()
 	go d.neighbors()
 	go d.monitor(warn)
+	return &Discovery{d: d}
+}
+
+// AddManual starts monitoring the entries in input exactly like discovered devices:
+// ping (for IP addresses), periodic VAPIX query and expiry when they stay silent.
+// input may contain several entries (see ParseManual).
+func (dc *Discovery) AddManual(input string) error {
+	entries, err := ParseManual(input)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		for _, dev := range e.Devices {
+			dc.d.emit(dev)
+		}
+	}
+	return nil
+}
+
+// AddDevice starts monitoring an already parsed manual device.
+func (dc *Discovery) AddDevice(dev Device) {
+	if dev.Online {
+		dc.d.emit(dev)
+	}
 }
 
 // CheckInterval: interval of the background checks (query, IPv6 neighbors, SSDP, login).
-// Pings happen every second so that an outage is noticed immediately.
+// Pings happen every PingInterval so that an outage is noticed quickly.
 const CheckInterval = 10 * time.Second
 
 const (
-	pingInterval     = time.Second
+	PingInterval     = 2 * time.Second
+	pingTimeout      = 600 * time.Millisecond
 	enrichInterval   = CheckInterval
 	neighborInterval = CheckInterval
 	ssdpInterval     = CheckInterval
+	resolveTTL       = time.Minute // re-resolve hostnames for the ping
 )
 
 type discoverer struct {
@@ -79,14 +114,31 @@ type discoverer struct {
 	enriching map[string]bool      // endpoint → query running
 	ifaces    map[string]bool      // interfaces devices were found on
 	targets   map[string]*target   // key (serial, otherwise IP) → monitored address
+	enrichSem chan struct{}        // limits concurrent HTTP enrichment
 }
 
 // target is the address a device is monitored at (ping, query).
 type target struct {
-	serial, ip string
-	port       int
-	online     bool
-	source     string
+	serial    string
+	ip        string // address or hostname
+	port      int
+	scheme    string
+	httpsPort int
+	online    bool
+	source    string
+
+	pingIPs       []string  // ping candidates, IPv4 first, then IPv6
+	resolvedIPv4  string    // IPv4 address behind a hostname
+	resolvedIPv6  []string  // IPv6 addresses behind a hostname
+	iface         string    // interface for the resolved address
+	resolvedAt    time.Time // last DNS lookup
+	resolving     bool      // lookup running
+	resolveFail   int       // consecutive failed lookups
+	resolveFailed bool      // current lookup failed
+	remote4       bool      // IPv4 is outside the local networks
+	remote4Known  bool
+	remote6       bool // preferred IPv6 is outside the local networks
+	remote6Known  bool
 }
 
 func (d *discoverer) emit(dev Device) {
@@ -114,7 +166,7 @@ func (d *discoverer) track(dev Device) {
 		if dev.Gone || !dev.Online {
 			return
 		}
-		t = &target{serial: dev.Serial, source: dev.Source}
+		t = &target{serial: dev.Serial, source: dev.Source, scheme: dev.Scheme, httpsPort: dev.HTTPSPort}
 		d.targets[key] = t
 	}
 	if dev.Gone {
@@ -122,8 +174,32 @@ func (d *discoverer) track(dev Device) {
 	} else if dev.Online {
 		t.online = true
 	}
-	if dev.IP != "" && !(IsLinkLocal(dev.IP) && t.ip != "" && !IsLinkLocal(t.ip)) {
+	if dev.IP != "" && !(IsAnyLinkLocal(dev.IP) && t.ip != "" && !IsAnyLinkLocal(t.ip)) {
+		if t.ip != dev.IP {
+			t.pingIPs, t.resolvedIPv4, t.resolvedIPv6, t.iface = nil, "", nil, ""
+			t.resolvedAt, t.resolving = time.Time{}, false
+			t.resolveFail, t.resolveFailed = 0, false
+			t.remote4, t.remote4Known, t.remote6, t.remote6Known = false, false, false, false
+		}
 		t.ip, t.port = dev.IP, dev.Port
+	}
+	if dev.Scheme != "" {
+		t.scheme = dev.Scheme
+	}
+	if dev.HTTPSPort != 0 {
+		t.httpsPort = dev.HTTPSPort
+	}
+	if dev.Serial != "" {
+		t.serial = dev.Serial
+	}
+	if dev.RemoteIPv4Known {
+		t.remote4, t.remote4Known = dev.RemoteIPv4, true
+	}
+	if dev.RemoteIPv6Known {
+		t.remote6, t.remote6Known = dev.RemoteIPv6, true
+	}
+	if dev.ResolveKnown {
+		t.resolveFailed = dev.ResolveFailed
 	}
 	if dev.Serial != "" && dev.IP != "" {
 		// device was known only by address before (SSDP) → don't monitor twice
@@ -145,6 +221,10 @@ func (d *discoverer) enrichSoon(dev Device) {
 	d.enriching[ep] = true
 	d.mu.Unlock()
 	go func() {
+		if d.enrichSem != nil {
+			d.enrichSem <- struct{}{}
+			defer func() { <-d.enrichSem }()
+		}
 		d.enrich(dev)
 		d.mu.Lock()
 		delete(d.enriching, ep)
@@ -159,29 +239,65 @@ func (d *discoverer) monitor(warn func(error)) {
 		select {
 		case <-d.ctx.Done():
 			return
-		case <-time.After(pingInterval):
+		case <-time.After(PingInterval):
 		}
 		d.mu.Lock()
 		var ts []target
-		for _, t := range d.targets {
-			if t.ip != "" {
-				ts = append(ts, *t)
+		type lookup struct{ key, host string }
+		var lookups []lookup
+		for key, t := range d.targets {
+			if t.ip == "" {
+				continue
 			}
+			if _, err := netip.ParseAddr(t.ip); err != nil && !t.resolving &&
+				(t.resolvedAt.IsZero() || time.Since(t.resolvedAt) >= resolveTTL) {
+				t.resolving = true
+				lookups = append(lookups, lookup{key, t.ip})
+			}
+			ts = append(ts, *t)
 		}
 		d.mu.Unlock()
+		for _, l := range lookups {
+			go d.resolve(l.key, l.host)
+		}
 		for _, t := range ts {
-			dev := Device{Serial: t.serial, IP: t.ip, Port: t.port, Online: true, Source: t.source}
+			_, ipErr := netip.ParseAddr(t.ip)
+			isHost := ipErr != nil
+			dev := Device{Serial: t.serial, IP: t.ip, Port: t.port, Scheme: t.scheme,
+				HTTPSPort: t.httpsPort, Online: true, Source: t.source,
+				ResolvedIPv4: t.resolvedIPv4, IPv6: t.resolvedIPv6, Iface: t.iface,
+				ResolveFailed: isHost && t.resolveFailed, ResolveKnown: isHost,
+				RemoteIPv4: t.remote4, RemoteIPv4Known: t.remote4Known,
+				RemoteIPv6: t.remote6, RemoteIPv6Known: t.remote6Known}
 			d.enrichSoon(dev)
-			go func(t target) {
-				rtt, err := Ping(t.ip, 900*time.Millisecond)
-				if err != nil && !IsTimeout(err) {
+			cands := []string{t.ip}
+			if isHost {
+				cands = t.pingIPs
+			}
+			if len(cands) == 0 {
+				// Hostname not resolved (yet): report the state without a sign of life.
+				u := dev
+				u.Online = false
+				if d.ctx.Err() == nil {
+					d.found(u)
+				}
+				continue
+			}
+			go func(t target, cands []string, isHost bool) {
+				rtt, used, noReply, err := pingAny(cands, pingTimeout)
+				if err != nil && !noReply {
 					warnOnce.Do(func() {
 						warn(fmt.Errorf("ping not possible (%v) – reachability via HTTP only", err))
 					})
 					return
 				}
 				now := time.Now()
-				u := Device{Serial: t.serial, IP: t.ip, Port: t.port, PingAt: now, Ping: rtt}
+				u := Device{Serial: t.serial, IP: t.ip, Port: t.port, Scheme: t.scheme,
+					HTTPSPort: t.httpsPort, PingAt: now, Ping: rtt, PingAddr: used,
+					ResolvedIPv4: t.resolvedIPv4, IPv6: t.resolvedIPv6, Iface: t.iface,
+					ResolveFailed: isHost && t.resolveFailed, ResolveKnown: isHost,
+					RemoteIPv4: t.remote4, RemoteIPv4Known: t.remote4Known,
+					RemoteIPv6: t.remote6, RemoteIPv6Known: t.remote6Known}
 				if err != nil {
 					u.Ping = -1
 				} else {
@@ -190,21 +306,148 @@ func (d *discoverer) monitor(warn func(error)) {
 				if d.ctx.Err() == nil {
 					d.found(u)
 				}
-			}(t)
+			}(t, cands, isHost)
 		}
 	}
+}
+
+// pingFn is Ping; tests replace it to simulate reachable/unreachable addresses.
+var pingFn = Ping
+
+// pingAny tries the addresses in order (IPv4 first for hostnames) and returns the
+// first reply. noReply means at least one attempt timed out – then a failed fallback
+// (e.g. no IPv6 route) is not reported as "ping not possible".
+func pingAny(addrs []string, timeout time.Duration) (rtt time.Duration, used string, noReply bool, err error) {
+	if len(addrs) == 0 {
+		return 0, "", false, errors.New("no address")
+	}
+	var last error
+	for _, a := range addrs {
+		rtt, err := pingFn(a, timeout)
+		if err == nil {
+			return rtt, a, false, nil
+		}
+		last = err
+		if IsTimeout(err) {
+			noReply = true
+		}
+	}
+	return 0, strings.Join(addrs, ", "), noReply, last
+}
+
+// resolve looks up a hostname and stores its addresses for ping and display. Runs in
+// the background so a slow DNS server never delays the other devices.
+func (d *discoverer) resolve(key, host string) {
+	ctx, cancel := context.WithTimeout(d.ctx, 5*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	var v4, v6 []string
+	if err == nil {
+		for _, ip := range ips {
+			ip = ip.Unmap()
+			switch {
+			case ip.Is4():
+				if s := ip.String(); !slices.Contains(v4, s) {
+					v4 = append(v4, s)
+				}
+			case ip.Is6() && ip.IsGlobalUnicast() && !ip.IsLinkLocalUnicast():
+				if s := ip.String(); !slices.Contains(v6, s) {
+					v6 = append(v6, s)
+				}
+			}
+		}
+	}
+	var cands []string
+	for i, a := range v4 {
+		if i >= 2 {
+			break
+		}
+		cands = append(cands, a)
+	}
+	if len(v6) > 0 {
+		cands = append(cands, v6[0])
+	}
+	resolvedIPv4 := ""
+	if len(v4) > 0 {
+		resolvedIPv4 = v4[0]
+	}
+	primary := resolvedIPv4
+	if primary == "" && len(v6) > 0 {
+		primary = v6[0]
+	}
+	iface := ""
+	if primary != "" {
+		iface = IfaceForIP(primary)
+	}
+	remote4, remote4Known, remote6, remote6Known := false, false, false, false
+	if len(v4) > 0 {
+		remote4, remote4Known = IsRemoteIP(v4[0])
+	}
+	if len(v6) > 0 {
+		remote6, remote6Known = IsRemoteIP(v6[0])
+	}
+	d.mu.Lock()
+	if t := d.targets[key]; t != nil && t.ip == host {
+		t.resolvedAt, t.resolving = time.Now(), false
+		switch {
+		case err != nil:
+			t.resolveFail++
+			t.resolveFailed = true
+			if t.resolveFail >= 2 {
+				// Don't keep showing/pinging an address that DNS no longer returns.
+				t.pingIPs, t.resolvedIPv4, t.resolvedIPv6, t.iface = nil, "", nil, ""
+				t.remote4, t.remote4Known, t.remote6, t.remote6Known = false, false, false, false
+			}
+		case len(cands) == 0:
+			// resolved, but no usable address (e.g. only link-local)
+			t.resolveFail = 0
+			t.resolveFailed = true
+			t.pingIPs, t.resolvedIPv4, t.resolvedIPv6, t.iface = nil, "", nil, ""
+			t.remote4, t.remote4Known, t.remote6, t.remote6Known = false, false, false, false
+		default:
+			t.resolveFail, t.resolveFailed = 0, false
+			t.pingIPs, t.resolvedIPv4, t.resolvedIPv6, t.iface = cands, resolvedIPv4, v6, iface
+			t.remote4, t.remote4Known = remote4, remote4Known
+			t.remote6, t.remote6Known = remote6, remote6Known
+		}
+	}
+	d.mu.Unlock()
 }
 
 func (d *discoverer) enrich(dev Device) {
 	ctx, cancel := context.WithTimeout(d.ctx, 6*time.Second)
 	defer cancel()
-	c := NewClient(dev.IP, dev.Port, "", "")
-	upd := Device{Serial: dev.Serial, IP: dev.IP, Port: dev.Port, Source: dev.Source, Enriched: true}
+	c := dev.Client("", "")
+	defer c.hc.CloseIdleConnections() // don't leak keep-alive connections for short queries
+	remote4, remote4Known := dev.RemoteIPv4, dev.RemoteIPv4Known
+	if !remote4Known {
+		if ip := dev.IPv4(); ip != "" {
+			remote4, remote4Known = IsRemoteIP(ip)
+		}
+	}
+	remote6, remote6Known := dev.RemoteIPv6, dev.RemoteIPv6Known
+	if !remote6Known {
+		if ip := dev.PreferredIPv6(); ip != "" {
+			remote6, remote6Known = IsRemoteIP(ip)
+		}
+	}
+	upd := Device{Serial: dev.Serial, IP: dev.IP, Port: dev.Port, Scheme: dev.Scheme,
+		HTTPSPort: dev.HTTPSPort, Source: dev.Source, Enriched: true,
+		RemoteIPv4: remote4, RemoteIPv4Known: remote4Known,
+		RemoteIPv6: remote6, RemoteIPv6Known: remote6Known}
 	info, err := c.BasicInfo(ctx)
 	if err == nil {
 		upd.Model, upd.Firmware = info.Model, info.Firmware
 		if info.Serial != "" {
 			upd.Serial = info.Serial
+			// Let the neighbor table find IPv6 addresses for manual IP targets too.
+			d.mu.Lock()
+			for _, t := range d.targets {
+				if t.ip == dev.IP && (dev.Port == 0 || t.port == dev.Port) {
+					t.serial = info.Serial
+				}
+			}
+			d.mu.Unlock()
 		}
 	}
 	if err == nil || errors.Is(err, ErrAuth) {
@@ -216,12 +459,20 @@ func (d *discoverer) enrich(dev Device) {
 		upd.NeedsSetup = &needs
 		reachable = true
 	}
-	// Only report the protocol if the device answered at this address
-	// (otherwise e.g. a dead link-local address would show up as "HTTP").
-	if secure := c.Secure(ctx); reachable || secure {
+	// Only report the protocol if the device answered and the probe could run.
+	// Otherwise leave it unknown instead of wrongly showing "HTTP".
+	secure := c.Secure(ctx)
+	fixed := c.scheme != ""
+	known := fixed || ctx.Err() == nil
+	switch {
+	case fixed:
+		upd.HTTPS = &secure
+	case known && secure:
 		upd.HTTPS = &secure
 		reachable = true
-	} else if errors.Is(err, ErrNoHTTPS) {
+	case known && reachable:
+		upd.HTTPS = &secure
+	case known && errors.Is(err, ErrNoHTTPS):
 		no := false
 		upd.HTTPS = &no
 	}

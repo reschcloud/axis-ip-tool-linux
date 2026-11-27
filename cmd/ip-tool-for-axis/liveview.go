@@ -73,16 +73,25 @@ func loadPreview(ctx context.Context, c *axis.Client) (previewStart, error) {
 	if err != nil {
 		return previewStart{}, err
 	}
-	lens, err := c.GetLensControls(ctx)
-	if errors.Is(err, axis.ErrAuth) {
+	// Lens/optics info is optional: some accounts may see the image but not the PTZ API.
+	lens, _ := c.GetLensControls(ctx)
+	return previewStart{img: img, lens: lens}, nil
+}
+
+// loadPreviewAnonymous loads a first image without credentials. Lens controls are
+// optional: anonymous viewers often may not query them.
+func loadPreviewAnonymous(ctx context.Context, c *axis.Client) (previewStart, error) {
+	img, err := c.Snapshot(ctx, previewWidth)
+	if err != nil {
 		return previewStart{}, err
 	}
+	lens, _ := c.GetLensControls(ctx)
 	return previewStart{img: img, lens: lens}, nil
 }
 
 func (w *window) previewDialog(d *axis.Device, start previewStart) {
 	creds := w.creds[d.Key()]
-	lv := &liveView{w: w, c: axis.NewClient(d.IP, d.Port, creds[0], creds[1]),
+	lv := &liveView{w: w, c: d.Client(creds[0], creds[1]),
 		cmds: make(chan func(context.Context) error, 64), lens: start.lens}
 	lv.ctx, lv.cancel = context.WithCancel(context.Background())
 	lv.build(d)
@@ -322,9 +331,21 @@ func (lv *liveView) worker() {
 
 func (lv *liveView) run(f func(ctx context.Context, c *axis.Client) error) {
 	c := lv.c
+	cmd := func(ctx context.Context) error { return f(ctx, c) }
 	select {
-	case lv.cmds <- func(ctx context.Context) error { return f(ctx, c) }:
-	default: // queue full – the device doesn't keep up, drop the command
+	case lv.cmds <- cmd:
+		return
+	default:
+	}
+	// Queue full: the device doesn't keep up. Drop the oldest command so that a
+	// current stop is not silently lost behind stale moves.
+	select {
+	case <-lv.cmds:
+	default:
+	}
+	select {
+	case lv.cmds <- cmd:
+	default:
 	}
 }
 

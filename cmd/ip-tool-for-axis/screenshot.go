@@ -18,10 +18,22 @@ static int save_widget_png(GtkWidget *w, const char *path) {
 	gdk_paintable_snapshot(p, GDK_SNAPSHOT(s), width, height);
 	GskRenderNode *node = gtk_snapshot_free_to_node(s);
 	g_object_unref(p);
-	if (node == NULL)
+	if (node == NULL) {
+		g_printerr("screenshot: no render node (%dx%d)\n", width, height);
 		return 0;
+	}
 	GskRenderer *r = gtk_native_get_renderer(gtk_widget_get_native(w));
+	if (r == NULL) {
+		g_printerr("screenshot: no renderer (%dx%d)\n", width, height);
+		gsk_render_node_unref(node);
+		return 0;
+	}
 	GdkTexture *t = gsk_renderer_render_texture(r, node, NULL);
+	if (t == NULL) {
+		g_printerr("screenshot: no texture (%dx%d)\n", width, height);
+		gsk_render_node_unref(node);
+		return 0;
+	}
 	int ok = gdk_texture_save_to_png(t, path);
 	g_object_unref(t);
 	gsk_render_node_unref(node);

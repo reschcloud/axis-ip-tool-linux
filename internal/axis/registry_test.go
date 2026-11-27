@@ -41,6 +41,23 @@ func TestRegistryMerge(t *testing.T) {
 	}
 }
 
+func TestRecycledAddress(t *testing.T) {
+	r := NewRegistry()
+	if ch := r.Update(Device{Serial: "ACCC8E000001", IP: "10.0.0.5", Port: 80, Online: true}); !ch.Added {
+		t.Fatalf("first device: %+v", ch)
+	}
+	// same device gets a new address (DHCP)
+	r.Update(Device{Serial: "ACCC8E000001", IP: "10.0.0.6", Port: 80, Online: true})
+	// a new device (still without serial) uses the old address
+	ch := r.Update(Device{IP: "10.0.0.5", Port: 80, Online: true})
+	if !ch.Added || ch.Key != "10.0.0.5" || r.Len() != 2 {
+		t.Fatalf("recycled address merged into the old device: %+v, len %d", ch, r.Len())
+	}
+	if d := r.Get("ACCC8E000001"); d.IP != "10.0.0.6" {
+		t.Fatalf("old device IP = %s", d.IP)
+	}
+}
+
 func TestLinkLocalDoesNotReplaceRoutable(t *testing.T) {
 	r := NewRegistry()
 	r.Update(Device{Serial: "ACCC8EBD0790", IP: "100.64.19.186", Port: 80, Online: true})
@@ -53,6 +70,25 @@ func TestLinkLocalDoesNotReplaceRoutable(t *testing.T) {
 	r.Update(Device{Serial: "ACCC8E000001", IP: "10.0.0.5", Online: true})
 	if d := r.Get("ACCC8E000001"); d.IP != "10.0.0.5" {
 		t.Fatalf("IP = %s", d.IP)
+	}
+	// IPv6 link-local must not replace a routable address either
+	r.Update(Device{Serial: "ACCC8E000002", IP: "10.0.0.6", Online: true})
+	r.Update(Device{Serial: "ACCC8E000002", IP: "fe80::1%eth0", Online: true})
+	if d := r.Get("ACCC8E000002"); d.IP != "10.0.0.6" {
+		t.Fatalf("IP = %s, IPv6 link-local replaced the routable address", d.IP)
+	}
+}
+
+func TestClearAuth(t *testing.T) {
+	r := NewRegistry()
+	r.Update(Device{Serial: "ACCC8E000001", IP: "10.0.0.5", Online: true, Unlocked: true})
+	d := r.Get("ACCC8E000001")
+	if !d.Unlocked {
+		t.Fatal("not unlocked")
+	}
+	r.ClearAuth()
+	if d.Unlocked || d.AuthFailed || d.Status() != StatusNotLoggedIn {
+		t.Fatalf("after ClearAuth: unlocked=%v authFailed=%v status=%q", d.Unlocked, d.AuthFailed, d.Status())
 	}
 }
 
@@ -146,14 +182,15 @@ func TestRegistryExpire(t *testing.T) {
 
 // The neighbor table delivers the complete list: vanished addresses are dropped.
 func TestIPv6Full(t *testing.T) {
-	d := Device{Serial: "ACCC8E000001", IPv6: []string{"fe80::1", "2001:db8::1"}}
+	d := Device{Serial: "ACCC8E000001", IPv6: []string{"2001:db8::1"}}
+	// the neighbor table reports link-local addresses; mDNS/DNS addresses must survive
 	d.Merge(Device{Serial: "ACCC8E000001", IPv6Full: true, IPv6: []string{"fe80::1"}})
-	if len(d.IPv6) != 1 {
+	if len(d.IPv6) != 2 {
 		t.Fatalf("IPv6 = %v", d.IPv6)
 	}
 	d.Merge(Device{Serial: "ACCC8E000001", IPv6Full: true, IPv6: []string{}})
-	if len(d.IPv6) != 0 {
-		t.Fatalf("IPv6 = %v", d.IPv6)
+	if len(d.IPv6) != 1 || d.IPv6[0] != "2001:db8::1" {
+		t.Fatalf("IPv6 = %v, mDNS/DNS address lost", d.IPv6)
 	}
 }
 

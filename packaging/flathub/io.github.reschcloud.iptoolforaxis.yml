@@ -1,0 +1,53 @@
+# Flathub submission manifest.
+#
+# This file is not used by `make flatpak` (that uses ../io.github.reschcloud.iptoolforaxis.yml
+# with a local directory source). It is the manifest for the Flathub repository
+# flathub/io.github.reschcloud.iptoolforaxis.
+#
+# Before submitting:
+#   1. Tag the release (v0.5.0) and push it.
+#   2. Replace REPLACE_WITH_TAG_COMMIT with `packaging/flathub/prepare.sh v0.5.0`.
+#   3. Verify an offline build:
+#        flatpak-builder --force-clean --disable-download --repo=repo build-dir \
+#          packaging/flathub/io.github.reschcloud.iptoolforaxis.yml
+#   4. Run flatpak-builder-lint and appstreamcli/desktop-file validation.
+#
+# The Go modules are vendored in the tagged source, so no network is needed during the build.
+id: io.github.reschcloud.iptoolforaxis
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+command: ip-tool-for-axis
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # cameras via HTTP/VAPIX, SSDP discovery and ping
+  - --share=network
+  # Bonjour/mDNS discovery via the system's Avahi service
+  - --system-talk-name=org.freedesktop.Avahi
+
+build-options:
+  append-path: /usr/lib/sdk/golang/bin
+  env:
+    GOPATH: /run/build/ip-tool-for-axis/go
+    GOCACHE: /run/build/ip-tool-for-axis/go-cache
+    GOTOOLCHAIN: local
+    GOFLAGS: -mod=vendor
+    GOPROXY: "off"
+
+modules:
+  - name: ip-tool-for-axis
+    buildsystem: simple
+    build-commands:
+      - make build
+      - make install-app PREFIX=/app DESTDIR=/
+    sources:
+      - type: git
+        url: https://github.com/reschcloud/ip-tool-for-axis-linux.git
+        tag: v0.5.0
+        commit: REPLACE_WITH_TAG_COMMIT

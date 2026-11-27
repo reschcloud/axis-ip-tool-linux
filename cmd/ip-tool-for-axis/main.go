@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	appID   = "io.github.reschcloud.IPToolForAXIS"
+	appID   = "io.github.reschcloud.iptoolforaxis"
 	appName = "IP Tool for AXIS (Linux)"
 )
 
@@ -55,7 +55,7 @@ func main() {
 		w := newWindow(app)
 		w.Present()
 		if shot != "" {
-			w.SetDefaultSize(1400, 300)
+			w.SetDefaultSize(1400, 800)
 			w.screenshotAndQuit(shot, 12) // see screenshot.go
 		}
 	})

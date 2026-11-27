@@ -93,7 +93,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     continue-on-error: true
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
       options: --privileged
     steps:
       - uses: actions/checkout@v7
@@ -101,8 +101,8 @@ jobs:
           fetch-depth: 0 # Flatpak's make build also derives the app version from Git tags
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: io.github.reschcloud.IPToolForAXIS.${{ matrix.arch }}.flatpak
-          manifest-path: packaging/io.github.reschcloud.IPToolForAXIS.yml
+          bundle: io.github.reschcloud.iptoolforaxis.${{ matrix.arch }}.flatpak
+          manifest-path: packaging/io.github.reschcloud.iptoolforaxis.yml
           arch: ${{ matrix.arch }}
           upload-artifact: true
 

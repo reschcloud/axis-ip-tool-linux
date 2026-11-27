@@ -36,8 +36,8 @@ type fakeCamera struct {
 	fwUploads          [][]byte          // multipart bodies sent to firmwaremanagement.cgi
 	opticsSetup        bool              // lens via opticssetup.cgi (no opticscontrol.cgi)
 	opticsSetupQueries []string
-	optics             []map[string]any  // requests to opticscontrol.cgi
-	frames             int               // number of MJPEG frames before the stream ends
+	optics             []map[string]any // requests to opticscontrol.cgi
+	frames             int              // number of MJPEG frames before the stream ends
 }
 
 func md5hex(s string) string { h := md5.Sum([]byte(s)); return hex.EncodeToString(h[:]) }

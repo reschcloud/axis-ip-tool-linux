@@ -32,7 +32,9 @@ const usage = `ip-tool-for-axis-cli – find and configure Axis devices
 Usage: ip-tool-for-axis-cli [--https-only] COMMAND …
 
 Commands:
-  list     [-t 5s]                                  Discover devices on the network
+  list     [-t 5s] [-ip TARGET …]                   Discover devices on the network
+                                                     (TARGET: address, hostname, URL,
+                                                     CIDR or range; repeatable)
   info     <ip>                                     Show model, firmware, network
   init     <ip> [-u root]                           Create the first admin (factory state),
                 [-freq 50] [-mount ceiling]         set power line frequency/mounting position
@@ -99,6 +101,9 @@ func main() {
 		err = fmt.Errorf("unknown command %q", cmd)
 	}
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			os.Exit(130) // Ctrl-C
+		}
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
@@ -109,16 +114,19 @@ func main() {
 func cmdList(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
 	t := fs.String("t", "5s", "discovery duration (e.g. 5 or 10s)")
+	var ips stringList
+	fs.Var(&ips, "ip", "also monitor address, hostname, URL, CIDR or range; repeatable, may contain several entries")
 	fs.Parse(args)
-	list, err := discover(ctx, *t)
+	list, err := discover(ctx, *t, ips)
 	if err != nil {
 		return err
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "MODEL\tSERIAL\tHOSTNAME\tIPV4\tIPV6\tINTERFACE\tFIRMWARE\tPING\tCONNECTION\tSTATUS")
+	fmt.Fprintln(tw, "MODEL\tSERIAL\tHOSTNAME\tIPV4\tIPV6\tINTERFACE\tFIRMWARE\tPING\tPING VIA\tROUTE\tCONNECTION\tSTATUS")
 	for _, d := range list {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", d.Model, d.Serial, d.Hostname, d.IP,
-			d.PreferredIPv6(), d.Iface, d.Firmware, d.PingText(), d.Connection(), d.Status())
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", d.Model, d.Serial, d.Hostname,
+			d.IPv4(), ipv6CLI(d), d.Iface, d.Firmware, d.PingText(), d.PingAddr, routeCLI(d),
+			d.Connection(), d.Status())
 	}
 	tw.Flush()
 	if len(list) == 0 {
@@ -127,8 +135,36 @@ func cmdList(ctx context.Context, args []string) error {
 	return nil
 }
 
-// discover searches for devices for the duration t (e.g. "5" or "10s").
-func discover(ctx context.Context, t string) ([]*axis.Device, error) {
+// ipv6CLI shows the zone for link-local addresses (the interface column disambiguates).
+func ipv6CLI(d *axis.Device) string {
+	a := d.PreferredIPv6()
+	if a != "" && axis.IsIPv6LinkLocal(a) && d.Iface != "" {
+		return a + "%" + d.Iface
+	}
+	return a
+}
+
+// routeCLI returns "remote", "local" or "" (unknown) for the Route column.
+func routeCLI(d *axis.Device) string {
+	remote, known := false, false
+	if d.RemoteIPv4Known {
+		remote, known = remote || d.RemoteIPv4, true
+	}
+	if d.RemoteIPv6Known {
+		remote, known = remote || d.RemoteIPv6, true
+	}
+	if !known {
+		return ""
+	}
+	if remote {
+		return "remote"
+	}
+	return "local"
+}
+
+// discover searches for devices for the duration t (e.g. "5" or "10s"). Manual
+// addresses are monitored like discovered devices.
+func discover(ctx context.Context, t string, manual []string) ([]*axis.Device, error) {
 	var dur time.Duration
 	if n, err := strconv.Atoi(t); err == nil {
 		dur = time.Duration(n) * time.Second
@@ -139,12 +175,29 @@ func discover(ctx context.Context, t string) ([]*axis.Device, error) {
 	defer cancel()
 	var mu sync.Mutex
 	reg := axis.NewRegistry()
-	axis.Discover(sctx, func(d axis.Device) {
+	disc := axis.Discover(sctx, func(d axis.Device) {
 		mu.Lock()
 		reg.Update(d)
 		mu.Unlock()
 	}, func(err error) { fmt.Fprintln(os.Stderr, "Note:", err) })
-	<-sctx.Done()
+	for _, addr := range manual {
+		if err := disc.AddManual(addr); err != nil {
+			return nil, err
+		}
+	}
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			mu.Lock()
+			reg.Expire(time.Now(), axis.MaxAge)
+			mu.Unlock()
+			continue
+		case <-sctx.Done():
+		}
+		break
+	}
 	time.Sleep(300 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
@@ -221,10 +274,10 @@ func cmdInit(ctx context.Context, args []string) error {
 	}
 	pw := os.Getenv("AXIS_PASSWORD")
 	if pw == "" {
-		if pw, err = readPassword("New password: "); err != nil {
+		if pw, err = readPassword(ctx, "New password: "); err != nil {
 			return err
 		}
-		pw2, err := readPassword("Repeat: ")
+		pw2, err := readPassword(ctx, "Repeat: ")
 		if err != nil {
 			return err
 		}
@@ -695,6 +748,16 @@ func authFlags(name string) (*flag.FlagSet, *string) {
 	return fs, fs.String("u", "root", "user name")
 }
 
+// stringList collects a flag that may be given several times.
+type stringList []string
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+
+func (s *stringList) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
 // reorder allows flags after the IP too ("ip-tool-for-axis-cli net 1.2.3.4 -dhcp").
 func reorder(args []string) []string {
 	var flags, pos []string
@@ -734,7 +797,7 @@ func login(ctx context.Context, ip, user string) (*axis.Client, error) {
 	pw := os.Getenv("AXIS_PASSWORD")
 	if pw == "" {
 		var err error
-		if pw, err = readPassword(fmt.Sprintf("Password for %s@%s: ", user, ip)); err != nil {
+		if pw, err = readPassword(ctx, fmt.Sprintf("Password for %s@%s: ", user, ip)); err != nil {
 			return nil, err
 		}
 	}
@@ -751,8 +814,9 @@ func localTZ() string {
 	return ""
 }
 
-// readPassword reads from the terminal without echo (no external dependency).
-func readPassword(prompt string) (string, error) {
+// readPassword reads from the terminal without echo (no external dependency) and
+// aborts when ctx is canceled (Ctrl-C).
+func readPassword(ctx context.Context, prompt string) (string, error) {
 	fmt.Fprint(os.Stderr, prompt)
 	fd := os.Stdin.Fd()
 	var old syscall.Termios
@@ -763,11 +827,35 @@ func readPassword(prompt string) (string, error) {
 		ioctl(fd, syscall.TCSETS, &t)
 		defer func() { ioctl(fd, syscall.TCSETS, &old); fmt.Fprintln(os.Stderr) }()
 	}
+	if err := waitReadable(ctx, int(fd)); err != nil {
+		return "", err
+	}
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil && line == "" {
 		return "", err
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// waitReadable waits until fd has input or ctx is canceled.
+func waitReadable(ctx context.Context, fd int) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var set syscall.FdSet
+		set.Bits[fd/64] |= 1 << (uint(fd) % 64)
+		tv := syscall.Timeval{Usec: 200000}
+		n, err := syscall.Select(fd+1, &set, nil, nil, &tv)
+		switch {
+		case err == syscall.EINTR:
+			continue
+		case err != nil:
+			return err
+		case n > 0:
+			return nil
+		}
+	}
 }
 
 func ioctl(fd uintptr, req uintptr, t *syscall.Termios) error {

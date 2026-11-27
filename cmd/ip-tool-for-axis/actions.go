@@ -162,6 +162,44 @@ func label(d *axis.Device) string {
 	return d.IP
 }
 
+// needsInitialUser: creating the first administrator is possible – the device is in
+// factory state or its state is unknown. A configured device (also a locked one) needs
+// a login instead; the API cannot change an existing password.
+func needsInitialUser(d *axis.Device) bool {
+	if d == nil {
+		return false
+	}
+	if d.NeedsSetup != nil && !*d.NeedsSetup {
+		return false
+	}
+	if d.IsLocked() || d.Unlocked || d.AuthFailed {
+		return false
+	}
+	return true
+}
+
+// actionWithoutLogin: actions that can be used without an app login. The website has
+// its own login and live view may be enabled for anonymous viewers on the camera.
+func actionWithoutLogin(key string) bool {
+	switch key {
+	case "batch", "browser", "preview":
+		return true
+	}
+	return false
+}
+
+// requiresLogin: a user exists but no valid login is known. Actions then open the
+// login dialog first; the buttons show a lock icon but stay clickable.
+func requiresLogin(d *axis.Device) bool {
+	if d == nil || !d.Online || d.Unlocked {
+		return false
+	}
+	if d.NeedsSetup != nil && *d.NeedsSetup {
+		return false
+	}
+	return !needsInitialUser(d)
+}
+
 // ---------------------------------------------------------------- Login
 
 // withLogin runs action with stored credentials and asks for user and password
@@ -173,17 +211,17 @@ func withLogin[T any](w *window, d *axis.Device, what string,
 		// factory state: logging in is impossible, create a user first
 		w.toast(label(d) + ": no user created yet – please set a password first")
 		w.selectKey(d.Key())
-		w.onPassword()
+		w.passwordAction(d)
 		return
 	}
 	var attempt func(user, pass string, forAll bool)
 	attempt = func(user, pass string, forAll bool) {
 		key := d.Key()
-		ip, port := d.IP, d.Port
+		snap := *d
 		async(func() (T, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			return action(ctx, axis.NewClient(ip, port, user, pass))
+			return action(ctx, snap.Client(user, pass))
 		}, func(v T) {
 			w.creds[key] = [2]string{user, pass}
 			done(v)
@@ -217,6 +255,11 @@ func withLogin[T any](w *window, d *axis.Device, what string,
 }
 
 func (w *window) askLogin(d *axis.Device, errMsg string, cb func(user, pass string, forAll bool)) {
+	key := d.Key()
+	if w.loginOpen[key] {
+		return // a dialog for this device is already open
+	}
+	w.loginOpen[key] = true
 	body := fmt.Sprintf("%s (%s)", label(d), d.IP)
 	if errMsg != "" {
 		body += "\n\n" + errMsg
@@ -232,6 +275,13 @@ func (w *window) askLogin(d *axis.Device, errMsg string, cb func(user, pass stri
 	pass.SetActivatesDefault(true)
 	extra := gtk.NewBox(gtk.OrientationVertical, 12)
 	extra.Append(boxedList(user, pass))
+	if d.HTTPS != nil && !*d.HTTPS {
+		warn := note("⚠ This device is only reachable via HTTP. The password is transmitted " +
+			"unencrypted and can be read by others on the local network.")
+		warn.RemoveCSSClass("dim-label")
+		warn.AddCSSClass("warning")
+		extra.Append(warn)
+	}
 	forAll := gtk.NewCheckButtonWithLabel("")
 	if n := len(w.loginCandidates(d.Key())); n > 0 {
 		forAll.SetLabel(fmt.Sprintf("Use these credentials for all other devices that are not logged in too (%d)", n))
@@ -249,12 +299,14 @@ func (w *window) askLogin(d *axis.Device, errMsg string, cb func(user, pass stri
 	dlg.SetDefaultResponse("ok")
 	dlg.SetCloseResponse("cancel")
 	dlg.ConnectResponse(func(r string) {
+		delete(w.loginOpen, key)
 		if r == "ok" {
 			all := forAll.Parent() != nil && forAll.Active()
 			w.lastUser, w.lastForAll = strings.TrimSpace(user.Text()), all
 			cb(strings.TrimSpace(user.Text()), pass.Text(), all)
 		}
 	})
+	dlg.ConnectClosed(func() { delete(w.loginOpen, key) })
 	dlg.Present(w)
 	pass.GrabFocus()
 }
@@ -266,6 +318,9 @@ func (w *window) loginCandidates(except string) []string {
 	for _, d := range w.reg.All() {
 		if d.Key() == except || !d.Online || d.IP == "" || d.Unlocked ||
 			(d.NeedsSetup != nil && *d.NeedsSetup) {
+			continue
+		}
+		if s := d.Status(); s == axis.StatusNoVAPIX || s == axis.StatusUnresolved {
 			continue
 		}
 		keys = append(keys, d.Key())
@@ -297,14 +352,13 @@ func (w *window) unlockOthers(except, user, pass string) {
 	}
 	for _, key := range keys {
 		d := reg.Get(key)
-		ip, port := d.IP, d.Port
+		snap := *d
 		w.infoPending[key] = true
 		w.rerender(key)
 		async(func() (axis.Device, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			c := axis.NewClient(ip, port, user, pass)
-			return loginInfo(ctx, c)
+			return loginInfo(ctx, snap.Client(user, pass))
 		}, func(info axis.Device) {
 			delete(w.infoPending, key)
 			if dev := reg.Get(key); dev != nil && reg == w.reg {
@@ -333,7 +387,8 @@ func loginInfo(ctx context.Context, c *axis.Client) (axis.Device, error) {
 	if err != nil {
 		return axis.Device{}, err
 	}
-	out := axis.Device{Model: info.Model, Firmware: info.Firmware, Unlocked: true, Online: true}
+	out := axis.Device{Model: info.Model, Firmware: info.Firmware, Serial: info.Serial,
+		Unlocked: true, Online: true}
 	if n, err := c.GetNetwork(ctx); err == nil && n.Hostname != "" {
 		out.Hostname, out.HostnameSet = strings.ToLower(n.Hostname), true
 	}
@@ -342,7 +397,10 @@ func loginInfo(ctx context.Context, c *axis.Client) (axis.Device, error) {
 
 // asUpdate adds the device identity to a loginInfo result.
 func asUpdate(info axis.Device, dev *axis.Device) axis.Device {
-	info.Serial, info.IP, info.Port = dev.Serial, dev.IP, dev.Port
+	if info.Serial == "" {
+		info.Serial = dev.Serial
+	}
+	info.IP, info.Port = dev.IP, dev.Port
 	return info
 }
 
@@ -353,42 +411,41 @@ func (w *window) onBrowser() {
 	if d == nil {
 		return
 	}
-	gtk.NewURILauncher(d.WebURL()).Launch(context.Background(), &w.Window, nil)
+	w.openWeb(d)
 }
 
 func (w *window) onPassword() {
-	d := w.selected()
-	if d == nil {
+	if d := w.selected(); d != nil {
+		w.passwordAction(d)
+	}
+}
+
+func (w *window) passwordAction(d *axis.Device) {
+	if !needsInitialUser(d) {
+		if !d.Unlocked {
+			// A user exists but we are not logged in: log in first (one password
+			// prompt). After that the password can be changed.
+			w.unlock(d)
+			return
+		}
+		w.changePassword(d)
 		return
 	}
 	user := entryRow("User name", "root")
 	p1 := passwordRow("Password")
 	p2 := passwordRow("Repeat password")
-	dlg := newFormDialog("Password – "+label(d), "Set", 460)
-	if d.NeedsSetup != nil && !*d.NeedsSetup {
-		dlg.add(note("A user is already set up on this device. To change the password, " +
-			"please use the web interface or reset the device."))
-	} else {
-		dlg.add(note("Creates the first administrator on a device in factory state. " +
-			"From AXIS OS 10 on, a user name other than \"root\" is possible too."))
-	}
-	if d.HTTPS != nil && !*d.HTTPS {
-		warn := note("⚠ This device is only reachable via HTTP. The password is transmitted " +
-			"unencrypted and can be read by others on the local network.")
-		warn.RemoveCSSClass("dim-label")
-		warn.AddCSSClass("warning")
-		dlg.add(warn)
-	}
+	dlg := newFormDialog("Set password – "+label(d), "Set", 460)
+	dlg.add(note("Creates the first administrator on a device in factory state. " +
+		"From AXIS OS 10 on, a user name other than \"root\" is possible too."))
+	addHTTPWarning(dlg, d)
 	dlg.add(boxedList(user, p1, p2))
 	// power line frequency/mounting position only at commissioning (device without user)
 	freq, mount := setupRows()
-	if d.NeedsSetup == nil || *d.NeedsSetup {
-		dlg.add(heading("Commissioning"))
-		dlg.add(boxedList(freq, mount))
-	}
-	initial := d.NeedsSetup == nil || *d.NeedsSetup
+	dlg.add(heading("Commissioning"))
+	dlg.add(boxedList(freq, mount))
 	dlg.SetFocus(p1)
-	key, ip, port := d.Key(), d.IP, d.Port
+	key, ip := d.Key(), d.IP
+	snap := *d
 	dlg.apply.ConnectClicked(func() {
 		u, a, b := strings.TrimSpace(user.Text()), p1.Text(), p2.Text()
 		switch {
@@ -402,10 +459,7 @@ func (w *window) onPassword() {
 			dlg.toast("Please use at least 8 characters")
 			return
 		}
-		var setup axis.InitialSetup
-		if initial {
-			setup = readSetup(freq, mount)
-		}
+		setup := readSetup(freq, mount)
 		dlg.busy(true)
 		type result struct {
 			skipped  []string
@@ -414,23 +468,100 @@ func (w *window) onPassword() {
 		async(func() (result, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 			defer cancel()
-			if err := axis.NewClient(ip, port, "", "").CreateInitialUser(ctx, u, a); err != nil {
+			if err := snap.Client("", "").CreateInitialUser(ctx, u, a); err != nil {
 				return result{}, err
 			}
 			// the user exists – only report errors of the image settings
 			var r result
 			if !setup.Empty() {
-				r.skipped, r.setupErr = axis.NewClient(ip, port, u, a).ApplyInitialSetup(ctx, setup)
+				r.skipped, r.setupErr = snap.Client(u, a).ApplyInitialSetup(ctx, setup)
 			}
 			return r, nil
 		}, func(r result) {
 			w.creds[key] = [2]string{u, a}
 			if dev := w.reg.Get(key); dev != nil {
-				f := false
-				dev.NeedsSetup = &f
-				w.onDevice(context.Background(), *dev)
+				w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP,
+					Port: dev.Port, Online: dev.Online, Unlocked: true})
 			}
 			w.toast(fmt.Sprintf("User \"%s\" created on %s%s", u, ip, setupResult(setup, r.skipped, r.setupErr)))
+			dlg.Close()
+		}, func(err error) {
+			if errors.Is(err, axis.ErrHasUser) {
+				dlg.Close()
+				if dev := w.reg.Get(key); dev != nil {
+					no, yes := false, true
+					w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP,
+						Port: dev.Port, Online: dev.Online, NeedsSetup: &no, Locked: &yes})
+				}
+				w.toast("A user already exists on this device – please log in")
+				w.unlock(d)
+				return
+			}
+			dlg.busy(false)
+			dlg.toast(err.Error())
+		})
+	})
+	dlg.Present(w)
+}
+
+// addHTTPWarning points out that a password would be transmitted unencrypted.
+func addHTTPWarning(dlg *formDialog, d *axis.Device) {
+	if d.HTTPS == nil || *d.HTTPS {
+		return
+	}
+	warn := note("⚠ This device is only reachable via HTTP. The password is transmitted " +
+		"unencrypted and can be read by others on the local network.")
+	warn.RemoveCSSClass("dim-label")
+	warn.AddCSSClass("warning")
+	dlg.add(warn)
+}
+
+// changePassword changes the password of a user. Requires an existing login on the
+// device (the credentials are used as administrator).
+func (w *window) changePassword(d *axis.Device) {
+	key := d.Key()
+	creds, ok := w.creds[key]
+	if !ok {
+		w.unlock(d)
+		return
+	}
+	user := entryRow("User name", creds[0])
+	p1 := passwordRow("New password")
+	p2 := passwordRow("Repeat password")
+	dlg := newFormDialog("Change password – "+label(d), "Change", 460)
+	dlg.add(note("Changes the password of an existing user. Administrator rights are required."))
+	addHTTPWarning(dlg, d)
+	dlg.add(boxedList(user, p1, p2))
+	dlg.SetFocus(p1)
+	snap := *d
+	dlg.apply.ConnectClicked(func() {
+		target := strings.TrimSpace(user.Text())
+		a, b := p1.Text(), p2.Text()
+		switch {
+		case target == "" || a == "":
+			dlg.toast("User name and password required")
+			return
+		case a != b:
+			dlg.toast("Passwords don't match")
+			return
+		case len(a) < 8:
+			dlg.toast("Please use at least 8 characters")
+			return
+		}
+		dlg.busy(true)
+		async(func() (struct{}, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return struct{}{}, snap.Client(creds[0], creds[1]).ChangePassword(ctx, target, a)
+		}, func(struct{}) {
+			if target == creds[0] {
+				w.creds[key] = [2]string{target, a}
+				if dev := w.reg.Get(key); dev != nil {
+					w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP,
+						Port: dev.Port, Online: dev.Online, Unlocked: true})
+				}
+			}
+			w.toast("Password for " + target + " changed")
 			dlg.Close()
 		}, func(err error) {
 			dlg.busy(false)
@@ -447,7 +578,7 @@ func (w *window) onNetwork() {
 	}
 	if d.NeedsSetup != nil && *d.NeedsSetup {
 		w.toast("Set a password first")
-		w.onPassword()
+		w.passwordAction(d)
 		return
 	}
 	withLogin(w, d, "Network", func(ctx context.Context, c *axis.Client) (axis.NetworkConfig, error) {
@@ -484,6 +615,7 @@ func (w *window) networkDialog(d *axis.Device, cfg axis.NetworkConfig) {
 	}
 
 	oldIP, key := d.IP, d.Key()
+	snap := *d
 	dlg.apply.ConnectClicked(func() {
 		n := cfg
 		n.DHCP = dhcp.Active()
@@ -514,7 +646,7 @@ func (w *window) networkDialog(d *axis.Device, cfg axis.NetworkConfig) {
 		async(func() (struct{}, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			return struct{}{}, axis.NewClient(oldIP, d.Port, creds[0], creds[1]).SetNetwork(ctx, n)
+			return struct{}{}, snap.Client(creds[0], creds[1]).SetNetwork(ctx, n)
 		}, func(struct{}) {
 			dlg.Close()
 			switch {
@@ -553,7 +685,7 @@ func (w *window) onTime() {
 	}
 	if d.NeedsSetup != nil && *d.NeedsSetup {
 		w.toast("Set a password first")
-		w.onPassword()
+		w.passwordAction(d)
 		return
 	}
 	withLogin(w, d, "Date & time", func(ctx context.Context, c *axis.Client) (ntpState, error) {
@@ -618,7 +750,8 @@ func (w *window) timeDialog(d *axis.Device, st ntpState) {
 	dlg.add(heading("Manual"))
 	dlg.add(boxedList(manual))
 
-	key, ip, port := d.Key(), d.IP, d.Port
+	key := d.Key()
+	snap := *d
 	dlg.apply.ConnectClicked(func() {
 		name := strings.TrimSpace(tz.Text())
 		n := cfg
@@ -635,7 +768,7 @@ func (w *window) timeDialog(d *axis.Device, st ntpState) {
 		async(func() (struct{}, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			c := axis.NewClient(ip, port, creds[0], creds[1])
+			c := snap.Client(creds[0], creds[1])
 			if setNTP {
 				if err := c.SetNTP(ctx, n); err != nil {
 					return struct{}{}, err
@@ -660,12 +793,25 @@ func (w *window) onPreview() {
 	if d == nil {
 		return
 	}
-	if d.NeedsSetup != nil && *d.NeedsSetup {
-		w.toast("Set a password first")
-		w.onPassword()
+	open := func(st previewStart) { w.previewDialog(d, st) }
+	if d.Unlocked || w.creds[d.Key()] != ([2]string{}) {
+		withLogin(w, d, "Live view", loadPreview, open)
 		return
 	}
-	withLogin(w, d, "Live view", loadPreview, func(st previewStart) { w.previewDialog(d, st) })
+	// Not logged in (or factory state): the camera may allow anonymous viewers. Try
+	// that first and only ask for credentials / the initial password if it is disabled.
+	snap := *d
+	async(func() (previewStart, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return loadPreviewAnonymous(ctx, snap.Client("", ""))
+	}, open, func(err error) {
+		if errors.Is(err, axis.ErrAuth) || errors.Is(err, axis.ErrNoUser) {
+			withLogin(w, d, "Live view", loadPreview, open)
+			return
+		}
+		w.toast(fmt.Sprintf("%s: %v", label(d), err))
+	})
 }
 
 func (w *window) onRestart() {
@@ -673,7 +819,8 @@ func (w *window) onRestart() {
 	if d == nil {
 		return
 	}
-	dlg := adw.NewAlertDialog("Restart device?", fmt.Sprintf("%s (%s) will be restarted.", label(d), d.IP))
+	dlg := adw.NewAlertDialog("Restart device?", fmt.Sprintf("%s (%s) will be restarted.\n\n"+
+		"The device is unavailable for about a minute.", label(d), d.IP))
 	dlg.AddResponse("cancel", "Cancel")
 	dlg.AddResponse("restart", "Restart")
 	dlg.SetResponseAppearance("restart", adw.ResponseDestructive)
@@ -683,6 +830,9 @@ func (w *window) onRestart() {
 			return
 		}
 		withLogin(w, d, "Restart", func(ctx context.Context, c *axis.Client) (struct{}, error) {
+			if err := c.CheckLogin(ctx); err != nil {
+				return struct{}{}, err
+			}
 			return struct{}{}, c.Restart(ctx)
 		}, func(struct{}) { w.toast("Restart triggered") })
 	})

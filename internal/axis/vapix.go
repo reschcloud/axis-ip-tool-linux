@@ -109,10 +109,12 @@ type Client struct {
 	user, pass string
 	hc         *http.Client
 
-	mu     sync.Mutex
-	base   string // determined on the first call
-	secure bool
-	chal   *challenge
+	scheme    string // "" = detect, "http"/"https" = fixed by a manual URL
+	httpsPort int    // HTTPS port from a manual URL (0 = default)
+	mu        sync.Mutex
+	base      string // determined on the first call
+	secure    bool
+	chal      *challenge
 }
 
 // NewClient creates a client. port is the HTTP port (0 = 80).
@@ -121,20 +123,45 @@ func NewClient(host string, port int, user, pass string) *Client {
 	if port == 0 {
 		port = 80
 	}
+	tr := &http.Transport{
+		Proxy:           nil, // cameras are local, never via a proxy
+		TLSClientConfig: tlsConfig(),
+	}
+	// Link-local IPv6 addresses need the zone for dialing, but URLs can't carry it
+	// ("http://[fe80::1%eth0]/" is invalid). Dial the zoned address instead and put
+	// the zone-less address into the URL.
+	if a, err := netip.ParseAddr(host); err == nil && a.Zone() != "" {
+		plain := a.WithZone("").String()
+		dialHost := host
+		dialer := &net.Dialer{Timeout: 8 * time.Second}
+		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// Only the camera itself, not a redirect target on another host.
+			if h, p, err := net.SplitHostPort(addr); err == nil && h == plain {
+				addr = net.JoinHostPort(dialHost, p)
+			}
+			return dialer.DialContext(ctx, network, addr)
+		}
+	}
 	return &Client{
 		host: host, port: port,
 		user: user, pass: pass,
 		hc: &http.Client{
-			Timeout: 8 * time.Second,
-			Transport: &http.Transport{
-				Proxy:           nil, // cameras are local, never via a proxy
-				TLSClientConfig: tlsConfig(),
-			},
+			Timeout:   8 * time.Second,
+			Transport: tr,
 		},
 	}
 }
 
-// baseURL chooses the protocol on the first call.
+// urlHost is the host without an IPv6 zone: URLs can't contain it.
+func (c *Client) urlHost() string {
+	if a, err := netip.ParseAddr(c.host); err == nil && a.Zone() != "" {
+		return a.WithZone("").String()
+	}
+	return c.host
+}
+
+// baseURL chooses the protocol on the first call. A manual URL's scheme and HTTPS
+// port take precedence; otherwise HTTPS is detected.
 func (c *Client) baseURL(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	base := c.base
@@ -142,14 +169,31 @@ func (c *Client) baseURL(ctx context.Context) (string, error) {
 	if base != "" {
 		return base, nil
 	}
-	secure := ProbeHTTPS(ctx, c.host)
-	switch {
-	case secure:
-		base = "https://" + net.JoinHostPort(c.host, strconv.Itoa(httpsPort))
-	case HTTPSOnly():
-		return "", ErrNoHTTPS
+	host := c.urlHost()
+	var secure bool
+	switch c.scheme {
+	case "https":
+		secure = true
+		port := c.httpsPort
+		if port == 0 {
+			port = httpsPort
+		}
+		base = "https://" + net.JoinHostPort(host, strconv.Itoa(port))
+	case "http":
+		if HTTPSOnly() {
+			return "", ErrNoHTTPS
+		}
+		base = "http://" + net.JoinHostPort(host, strconv.Itoa(c.port))
 	default:
-		base = "http://" + net.JoinHostPort(c.host, strconv.Itoa(c.port))
+		secure = ProbeHTTPS(ctx, c.host)
+		switch {
+		case secure:
+			base = "https://" + net.JoinHostPort(host, strconv.Itoa(httpsPort))
+		case HTTPSOnly():
+			return "", ErrNoHTTPS
+		default:
+			base = "http://" + net.JoinHostPort(host, strconv.Itoa(c.port))
+		}
 	}
 	c.mu.Lock()
 	c.base, c.secure = base, secure
@@ -416,7 +460,9 @@ func (c *Client) CheckLogin(ctx context.Context) error {
 	}
 	if errors.Is(err, ErrAuth) {
 		// rejected – because of the password or the factory state?
-		if needs, e := NewClient(c.host, c.port, "", "").NeedsInitialUser(ctx); e == nil && needs {
+		anon := NewClient(c.host, c.port, "", "")
+		anon.scheme, anon.httpsPort = c.scheme, c.httpsPort
+		if needs, e := anon.NeedsInitialUser(ctx); e == nil && needs {
 			return ErrNoUser
 		}
 	}
@@ -448,6 +494,21 @@ func (c *Client) CreateInitialUser(ctx context.Context, user, pass string) error
 	form = url.Values{"action": {"update"}, "user": {user}, "pwd": {pass}}
 	_, data, err = c.do(ctx, http.MethodPost, "/axis-cgi/pwdgrp.cgi", []byte(form.Encode()),
 		"application/x-www-form-urlencoded", false)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(strings.ToLower(string(data)), "error") {
+		return errors.New(strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+// ChangePassword sets a new password for user. The client must be logged in as an
+// administrator; the user may be the logged-in one or another account.
+func (c *Client) ChangePassword(ctx context.Context, user, pass string) error {
+	form := url.Values{"action": {"update"}, "user": {user}, "pwd": {pass}}
+	_, data, err := c.do(ctx, http.MethodPost, "/axis-cgi/pwdgrp.cgi", []byte(form.Encode()),
+		"application/x-www-form-urlencoded", true)
 	if err != nil {
 		return err
 	}
@@ -932,9 +993,13 @@ func (c *Client) FactoryReset(ctx context.Context, keepNetwork bool) error {
 }
 
 func ignoreDisconnect(err error) error {
-	var ne net.Error
-	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, context.DeadlineExceeded) ||
-		(errors.As(err, &ne) && ne.Timeout()) || strings.Contains(err.Error(), "connection reset") {
+	if err == nil || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "connection reset") {
+		return nil
+	}
+	// A read timeout after sending the request is expected when the device reboots
+	// before answering. A dial/write timeout means the request may never have arrived.
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "read" {
 		return nil
 	}
 	return err

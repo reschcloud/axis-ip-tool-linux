@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.reschcloud.iptoolforaxis</id>
+  <name>IP Tool for AXIS (Linux)</name>
+  <summary>Find and set up Axis network cameras</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <developer id="io.github.reschcloud">
+    <name>IP Tool for AXIS contributors</name>
+  </developer>
+  <description>
+    <p>Finds Axis devices on the local network (Bonjour/mDNS and SSDP) and performs the basic
+      setup known from the AXIS IP Utility:</p>
+    <ul>
+      <li>Monitor devices continuously: ping, login status, IPv6 address and network interface</li>
+      <li>Create the first administrator on devices in factory default state and set power line frequency and mounting position</li>
+      <li>Configure IPv4 (DHCP or static), hostname and DNS</li>
+      <li>Set time zone, NTP servers or synchronise the clock</li>
+      <li>Live view with PTZ control, zoom/focus, autofocus and lens calibration</li>
+      <li>Configure many devices at once: sequential IP addresses, numbered host names or a CSV plan</li>
+      <li>Open the web interface (also via link-local IPv6), restart devices or reset them to factory defaults</li>
+    </ul>
+    <p>Not an official product of Axis Communications AB.</p>
+  </description>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Discovered cameras with status, IPv6 address and ping</caption>
+      <image>https://raw.githubusercontent.com/reschcloud/ip-tool-for-axis-linux/v0.5.0/data/screenshots/main-window.png</image>
+    </screenshot>
+  </screenshots>
+  <url type="homepage">https://github.com/reschcloud/ip-tool-for-axis-linux</url>
+  <url type="bugtracker">https://github.com/reschcloud/ip-tool-for-axis-linux/issues</url>
+  <launchable type="desktop-id">io.github.reschcloud.iptoolforaxis.desktop</launchable>
+  <provides>
+    <binary>ip-tool-for-axis</binary>
+    <binary>ip-tool-for-axis-cli</binary>
+  </provides>
+  <categories>
+    <category>Network</category>
+  </categories>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.5.0" date="2026-11-27">
+      <description>
+        <p>Cameras can be added manually by address, hostname, URL, CIDR prefix, range or
+          wildcard – also in mixed lists. Hostnames are resolved for ping (IPv4 first, IPv6
+          fallback), the table shows the resolved addresses and the outgoing interface, and a
+          new Route column marks devices behind a router. Passwords of existing users can now
+          be changed after login; live view and the web interface work without an app login
+          (anonymous viewers/browser login). Several robustness and status-display fixes, and
+          a 2 s ping interval.</p>
+      </description>
+    </release>
+    <release version="0.4.0" date="2026-11-26">
+      <description>
+        <p>Renamed to IP Tool for AXIS (Linux), with a new package name, Flatpak ID and CLI command.
+          Adds camera firmware updates, live view with PTZ and lens controls, and an app update notice
+          at startup. See the project README for migration from the old package.</p>
+      </description>
+    </release>
+    <release version="0.3.0" date="2026-11-18">
+      <description>
+        <p>English user interface. Continuous monitoring with ping and status, IPv6 address and interface
+          columns, web interface via link-local IPv6, power line frequency and mounting position at
+          commissioning, more reliable factory state detection. License changed to AGPL-3.0-or-later.</p>
+      </description>
+    </release>
+    <release version="0.2.0" date="2026-11-17">
+      <description><p>Configure many devices at once, login status with password check, factory reset, host name column.</p></description>
+    </release>
+    <release version="0.1.0" date="2026-11-17">
+      <description><p>First release: discovery, initial password, network, time/NTP, snapshot preview.</p></description>
+    </release>
+  </releases>
+</component>

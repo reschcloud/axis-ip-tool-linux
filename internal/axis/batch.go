@@ -395,7 +395,7 @@ func RunBatch(ctx context.Context, as []Assignment, s BatchSettings, progress fu
 	for i, a := range as {
 		res[i].Assignment = a
 		if ctx.Err() != nil {
-			res[i].Err = errors.New("abgebrochen")
+			res[i].Err = errors.New("cancelled")
 			progress(BatchEvent{Index: i, Done: true, Err: res[i].Err})
 			continue
 		}
@@ -414,7 +414,7 @@ func configureOne(ctx context.Context, a Assignment, s BatchSettings, step func(
 	if d.IP == "" {
 		return errors.New("device has no reachable address")
 	}
-	anon := NewClient(d.IP, d.Port, "", "")
+	anon := d.Client("", "")
 	needs, err := anon.NeedsInitialUser(ctx)
 	if errors.Is(err, ErrSetupUnknown) {
 		needs, err = false, nil // cannot be determined → log in; fails with ErrNoUser if necessary
@@ -441,7 +441,7 @@ func configureOne(ctx context.Context, a Assignment, s BatchSettings, step func(
 	if user == "" || pass == "" {
 		return errors.New("no credentials for this device")
 	}
-	c := NewClient(d.IP, d.Port, user, pass)
+	c := d.Client(user, pass)
 	step("Login")
 	if err := c.CheckLogin(ctx); err != nil {
 		return fmt.Errorf("login: %w", err)

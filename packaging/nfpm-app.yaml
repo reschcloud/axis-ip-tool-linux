@@ -21,14 +21,14 @@ contents:
   - src: build/ip-tool-for-axis-cli
     dst: /usr/bin/ip-tool-for-axis-cli
     file_info: { mode: 0755 }
-  - src: data/io.github.reschcloud.IPToolForAXIS.desktop
-    dst: /usr/share/applications/io.github.reschcloud.IPToolForAXIS.desktop
-  - src: data/io.github.reschcloud.IPToolForAXIS.metainfo.xml
-    dst: /usr/share/metainfo/io.github.reschcloud.IPToolForAXIS.metainfo.xml
-  - src: data/icons/hicolor/scalable/apps/io.github.reschcloud.IPToolForAXIS.svg
-    dst: /usr/share/icons/hicolor/scalable/apps/io.github.reschcloud.IPToolForAXIS.svg
-  - src: data/icons/hicolor/symbolic/apps/io.github.reschcloud.IPToolForAXIS-symbolic.svg
-    dst: /usr/share/icons/hicolor/symbolic/apps/io.github.reschcloud.IPToolForAXIS-symbolic.svg
+  - src: data/io.github.reschcloud.iptoolforaxis.desktop
+    dst: /usr/share/applications/io.github.reschcloud.iptoolforaxis.desktop
+  - src: data/io.github.reschcloud.iptoolforaxis.metainfo.xml
+    dst: /usr/share/metainfo/io.github.reschcloud.iptoolforaxis.metainfo.xml
+  - src: data/icons/hicolor/scalable/apps/io.github.reschcloud.iptoolforaxis.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/io.github.reschcloud.iptoolforaxis.svg
+  - src: data/icons/hicolor/symbolic/apps/io.github.reschcloud.iptoolforaxis-symbolic.svg
+    dst: /usr/share/icons/hicolor/symbolic/apps/io.github.reschcloud.iptoolforaxis-symbolic.svg
   - src: LICENSE
     dst: /usr/share/licenses/ip-tool-for-axis/LICENSE
 

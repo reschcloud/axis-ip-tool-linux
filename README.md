@@ -11,11 +11,14 @@ Not an official product of Axis Communications AB.
 | Feature | Implementation |
 |---|---|
 | Discover devices | Bonjour/mDNS via Avahi (D-Bus) + SSDP/UPnP |
-| Continuous monitoring | ping every second, query every 10 s; offline after 10 s without reply |
+| Add camera manually | address, hostname, http(s) URL, CIDR or range; monitored like a discovered device |
+| Device behind a router | 🌐 in the "Route" column when the address is outside the directly attached networks |
+| Continuous monitoring | ping every 2 s (IPv4 first, IPv6 fallback), query every 10 s; offline after 10 s without a reply (25 s if it never answers pings) |
 | Model, serial number, firmware | `basicdeviceinfo.cgi` (without login, with login for locked devices) |
 | IPv6 address and interface | Avahi + kernel neighbor table; link-local preferred, EUI-64 from the MAC |
 | Open web interface via IPv6 | link-local addresses via a local forwarding (browsers can't open `fe80::…%iface` URLs) |
 | Detect factory state / initial password | `systemready.cgi`, `pwdgrp.cgi` |
+| Change an existing password | `pwdgrp.cgi` after login; all actions show a lock and open the login first |
 | Commissioning: power line frequency, mounting position | `param.cgi` (50/60 Hz; ceiling/wall/desk) |
 | IPv4 (DHCP/static), hostname, DNS | `network_settings.cgi`, fallback `param.cgi` |
 | Time zone + time | `time.cgi`, fallback `date.cgi` |
@@ -29,6 +32,8 @@ Not an official product of Axis Communications AB.
 | Firmware: compare with axis.com, download, update (several devices) | AXIS OS listings on axis.com (SHA-256), My Axis sign-in, `firmwaremanagement.cgi` |
 
 ## Installation
+
+Flathub availability is planned; the packaging/release checklist is in [FLATHUB.md](FLATHUB.md).
 
 **One command** (Fedora, Ubuntu/Debian, Arch; x86_64 and arm64; Silverblue & co. automatically
 get the Flatpak variant):
@@ -87,7 +92,7 @@ sudo make install
 
 ### Moving from the old package
 
-The new package (`ip-tool-for-axis`) and Flatpak ID (`io.github.reschcloud.IPToolForAXIS`) do not
+The new package (`ip-tool-for-axis`) and Flatpak ID (`io.github.reschcloud.iptoolforaxis`) do not
 replace the old `axis-ip-tool` package or `io.github.reschcloud.AxisIpTool` Flatpak automatically.
 Remove the old installation separately if you no longer need it. Scripts that used `axisctl`
 should call `ip-tool-for-axis-cli` instead.
@@ -100,6 +105,8 @@ config directory to the new `ip-tool-for-axis/` directory (`~/.config` by defaul
 
 ```sh
 ip-tool-for-axis-cli list                     # discover devices
+ip-tool-for-axis-cli list -ip 192.168.0.90 -ip fe80::1234%eth0   # include manual targets
+ip-tool-for-axis-cli list -ip 'https://cam.example.com:8443, camera.local, 10.0.0.20-30'
 ip-tool-for-axis-cli init 192.168.0.90        # create the first admin (50 Hz, ceiling mount)
 ip-tool-for-axis-cli init 192.168.0.90 -freq 60 -mount wall
 ip-tool-for-axis-cli net 192.168.0.90 -ip 10.0.0.20/24 -gw 10.0.0.1 -hostname camera-yard
@@ -142,16 +149,33 @@ cmd/ip-tool-for-axis      GNOME app (Go, gotk4 + libadwaita)
 cmd/ip-tool-for-axis-cli  CLI (pure Go)
 internal/axis             discovery, VAPIX client, data model
 data/                     desktop file, metainfo, icons, screenshots
-packaging/                nfpm configuration, Flatpak manifest, install.sh, package scripts
+packaging/                nfpm configuration, Flatpak manifests, install.sh, package scripts
+docs/adr/                 architecture decision records
+vendor/                   vendored Go modules (offline/Flathub builds)
+FLATHUB.md                Flathub release checklist
 ```
 
 ## Notes
 
-- Devices are found in the same network segment (multicast is not routed).
+- Devices are found in the same network segment (multicast is not routed). Cameras in other
+  subnets or with a known address can be added manually (button **+** / menu → "Manual
+  cameras") as an address, hostname, complete `http(s)://` URL, CIDR prefix, range
+  (`192.168.0.10-20`) or wildcard (`192.168.0.*`); several entries may be separated by
+  comma, semicolon and/or spaces. They are pinged and queried exactly like discovered
+  devices; hostnames are resolved, their IPv4/IPv6 addresses and interface are shown, and
+  the ping tries IPv4 first, then IPv6 (hover over the Ping column to see the address
+  used). A 🌐 in the "Route" column marks devices outside the directly attached networks
+  – their traffic goes through a router.
+- When a camera has a user but the app is not logged in, the action buttons show a small
+  padlock and open the login dialog first. After login, "Change password" changes an
+  existing password via `pwdgrp.cgi`.
 - SSDP replies arrive on a random UDP port. A strict firewall may block them; the mDNS
   discovery via Avahi is not affected.
 - Ping uses unprivileged ICMP sockets (`net.ipv4.ping_group_range`, allowed by default on
   current distributions). Without them, reachability is checked via HTTP only.
+- A manually added hostname that cannot be resolved shows **Hostname not resolved**; a
+  reachable service that doesn't speak VAPIX (e.g. a web server on the same address) shows
+  **No VAPIX response**.
 - Communication with the cameras uses **HTTPS** if the device offers it, otherwise HTTP
   (column "Connection"). The cameras' self-signed certificates are accepted without
   verification: encrypted, but no protection against an active attacker on the network.

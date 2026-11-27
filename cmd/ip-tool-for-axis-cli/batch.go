@@ -129,7 +129,7 @@ func cmdBatch(ctx context.Context, args []string) error {
 	}
 
 	fmt.Fprintln(os.Stderr, "Discovering devices …")
-	all, err := discover(ctx, *t)
+	all, err := discover(ctx, *t, nil)
 	if err != nil {
 		return err
 	}
@@ -172,11 +172,11 @@ func cmdBatch(ctx context.Context, args []string) error {
 	}
 
 	if s.Password = os.Getenv("AXIS_PASSWORD"); s.Password == "" {
-		if s.Password, err = readPassword(fmt.Sprintf("Password for %s: ", s.User)); err != nil {
+		if s.Password, err = readPassword(ctx, fmt.Sprintf("Password for %s: ", s.User)); err != nil {
 			return err
 		}
 		if s.InitPassword {
-			p2, err := readPassword("Repeat: ")
+			p2, err := readPassword(ctx, "Repeat: ")
 			if err != nil {
 				return err
 			}

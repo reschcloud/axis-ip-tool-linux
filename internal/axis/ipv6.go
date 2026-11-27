@@ -98,6 +98,74 @@ func IfaceForIPv4(ip string) string {
 	return ""
 }
 
+// IfaceForIP returns the interface for ip: the one owning the matching local prefix, or
+// – for a routed address – the outgoing interface. A zone name is returned directly.
+func IfaceForIP(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil || !a.IsValid() {
+		return ""
+	}
+	if z := a.Zone(); z != "" {
+		return z
+	}
+	a = a.Unmap()
+	if name := ifaceContaining(a); name != "" {
+		return name
+	}
+	// Routed address: a UDP "dial" only performs the route lookup and tells us which
+	// local address (and therefore interface) would be used.
+	conn, err := net.Dial("udp", net.JoinHostPort(a.String(), "9"))
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	la, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || la.IP == nil {
+		return ""
+	}
+	b, ok := netip.AddrFromSlice(la.IP)
+	if !ok {
+		return ""
+	}
+	return ifaceContaining(b.Unmap())
+}
+
+// ifaceContaining finds an active interface with a prefix that contains a.
+func ifaceContaining(a netip.Addr) string {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, ifc := range ifs {
+		if ifc.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, _ := ifc.Addrs()
+		for _, ad := range addrs {
+			n, ok := ad.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			b, ok := netip.AddrFromSlice(n.IP)
+			if !ok {
+				continue
+			}
+			b = b.Unmap()
+			if b.Is4() != a.Is4() {
+				continue
+			}
+			ones, bits := n.Mask.Size()
+			if bits == 0 {
+				continue
+			}
+			if netip.PrefixFrom(b, ones).Contains(a) {
+				return ifc.Name
+			}
+		}
+	}
+	return ""
+}
+
 // Neighbor6 is an entry of the IPv6 neighbor table.
 type Neighbor6 struct {
 	Addr  string
@@ -155,7 +223,11 @@ func parseNeighbors(msgs []syscall.NetlinkMessage) []Neighbor6 {
 					n.MAC = strings.ToUpper(hex.EncodeToString(v))
 				}
 			}
-			b = b[(l+3)&^3:] // attributes are 4-byte aligned
+			next := (l + 3) &^ 3
+			if next > len(b) {
+				break
+			}
+			b = b[next:] // attributes are 4-byte aligned
 			if len(b) == 0 {
 				break
 			}

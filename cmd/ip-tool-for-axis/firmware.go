@@ -61,7 +61,10 @@ func (w *window) checkFirmware(key string) {
 		cur, ok := axis.ParseFWVersion(fw)
 		p, found, err := fwCatalog.FindProduct(ctx, model)
 		if ok && found && err == nil {
-			if vs, err := fwCatalog.Versions(ctx, p); err == nil {
+			vs, verr := fwCatalog.Versions(ctx, p)
+			if verr != nil {
+				err = verr
+			} else {
 				for _, c := range axis.FirmwareChoices(cur, vs) {
 					if strings.HasPrefix(c.Label, "Current track") {
 						newer = c.Version.String()
@@ -328,17 +331,26 @@ func (f *fwDialog) loginRow(r *fwRow) {
 
 func (f *fwDialog) loadRow(r *fwRow) {
 	c := f.w.creds[r.key]
-	ip, port := r.d.IP, r.d.Port
+	snap := *r.d
 	async(func() (fwInfo, error) {
 		ctx, cancel := context.WithTimeout(f.ctx, 40*time.Second)
 		defer cancel()
-		return loadFirmwareInfo(ctx, axis.NewClient(ip, port, c[0], c[1]))
+		return loadFirmwareInfo(ctx, snap.Client(c[0], c[1]))
 	}, func(fi fwInfo) {
 		if f.ctx.Err() == nil {
 			f.showInfo(r, fi)
 		}
 	}, func(err error) {
 		if f.ctx.Err() != nil {
+			return
+		}
+		if errors.Is(err, axis.ErrNoUser) {
+			if dev := f.w.reg.Get(r.key); dev != nil {
+				yes := true
+				f.w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP,
+					Port: dev.Port, Online: dev.Online, NeedsSetup: &yes})
+			}
+			r.row.SetSubtitle("No password set – create one first")
 			return
 		}
 		if errors.Is(err, axis.ErrAuth) {
@@ -480,7 +492,8 @@ func (f *fwDialog) run(r *fwRow) {
 	}
 	file, session, factory := f.file, f.session.Value, f.factoryMode()
 	creds := f.w.creds[r.key]
-	ip, port, old, product := r.d.IP, r.d.Port, r.info.firmware, r.info.product
+	snap := *r.d
+	old, product := r.info.firmware, r.info.product
 	r.running = true
 	f.running++
 	r.dd.SetSensitive(false)
@@ -527,7 +540,7 @@ func (f *fwDialog) run(r *fwRow) {
 					return err
 				}
 			}
-			c := axis.NewClient(ip, port, creds[0], creds[1])
+			c := snap.Client(creds[0], creds[1])
 			set("Uploading to the device …", 0)
 			newVer, err := c.UpgradeFirmware(f.ctx, path, factory, progress("Uploading"))
 			if err != nil {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -38,19 +39,37 @@ var columns = []column{
 	{"Model", true, func(d *axis.Device) string { return d.Model }, nil},
 	{"Serial number", false, func(d *axis.Device) string { return d.Serial }, nil},
 	{"Hostname", false, func(d *axis.Device) string { return d.Hostname }, nil},
-	{"IPv4 address", false, func(d *axis.Device) string { return d.IP }, func(a, b *axis.Device) bool { return axis.IPLess(a.IP, b.IP) }},
+	{"IPv4 address", false, func(d *axis.Device) string { return d.IPv4() }, func(a, b *axis.Device) bool { return axis.IPLess(a.IPv4(), b.IPv4()) }},
 	{"IPv6 address", false, func(d *axis.Device) string { return d.PreferredIPv6() }, nil},
 	{"Interface", false, func(d *axis.Device) string { return d.Iface }, nil},
 	{"Firmware", false, firmwareText, nil},
+	{"Route", false, remoteText, nil},
 	{"Ping", false, func(d *axis.Device) string { return d.PingText() }, nil},
 	{"Connection", false, func(d *axis.Device) string { return d.Connection() }, nil},
 	{"Status", false, func(d *axis.Device) string { return d.Status() }, nil},
+}
+
+// remoteText marks devices outside the directly attached networks (traffic via router).
+func remoteText(d *axis.Device) string {
+	if (d.RemoteIPv4Known && d.RemoteIPv4) || (d.RemoteIPv6Known && d.RemoteIPv6) {
+		return "🌐"
+	}
+	return ""
+}
+
+// localOrRouter describes a single address's route.
+func localOrRouter(remote bool) string {
+	if remote {
+		return "via router"
+	}
+	return "local network"
 }
 
 // Indizes besonderer Spalten in columns
 var (
 	ipColumn     = 3
 	ipv6Column   = 4
+	routeColumn  = len(columns) - 4
 	pingColumn   = len(columns) - 3
 	connColumn   = len(columns) - 2
 	statusColumn = len(columns) - 1
@@ -63,6 +82,8 @@ type window struct {
 	reg        *axis.Registry // use in the GTK thread only
 	creds      map[string][2]string
 	fwd        *axis.Forwarder         // local forwardings to link-local IPv6 addresses
+	manual     []string                // manually added camera addresses (IPv4/IPv6)
+	disc       *axis.Discovery         // running discovery (for manual additions)
 	infoAt     map[string]time.Time    // last query with login (refreshInfo)
 	lastUser   string                  // user name entered last (preset)
 	lastForAll bool                    // "for all others too" chosen last
@@ -76,25 +97,34 @@ type window struct {
 	search    *gtk.SearchEntry
 	toasts    *adw.ToastOverlay
 	buttons   map[string]*gtk.Button
+	contents  map[string]*adw.ButtonContent
+	locks     map[string]*gtk.Image
 
 	cancelScan  context.CancelFunc
 	infoPending map[string]bool         // running login checks (status column shows a spinner)
 	infoRunning map[string]bool         // running refreshInfo queries (silent ones too)
+	loginOpen   map[string]bool         // a login dialog is already open for this device
 	live        *gtk.Box                // "Discovery running" indicator in the header bar
 	spin        map[string]*gtk.Spinner // spinner of the status cell per device
 	statusParts map[uintptr]statusPart  // Statuszellen-Box → Inhalt
 }
 
 func newWindow(app *adw.Application) *window {
+	installStyles()
+	s, _ := loadSettings()
 	w := &window{
 		ApplicationWindow: adw.NewApplicationWindow(&app.Application),
 		app:               app,
 		reg:               axis.NewRegistry(),
 		creds:             map[string][2]string{},
+		manual:            s.Manual,
 		cells:             map[string][]*gtk.Label{},
 		buttons:           map[string]*gtk.Button{},
+		contents:          map[string]*adw.ButtonContent{},
+		locks:             map[string]*gtk.Image{},
 		infoPending:       map[string]bool{},
 		infoRunning:       map[string]bool{},
+		loginOpen:         map[string]bool{},
 		spin:              map[string]*gtk.Spinner{},
 		statusParts:       map[uintptr]statusPart{},
 		fwd:               axis.NewForwarder(),
@@ -126,6 +156,11 @@ func (w *window) build() {
 	refresh.SetActionName("win.rescan")
 	hb.PackStart(refresh)
 
+	add := gtk.NewButtonFromIconName("list-add-symbolic")
+	add.SetTooltipText("Add cameras manually")
+	add.ConnectClicked(func() { w.onAddManual() })
+	hb.PackStart(add)
+
 	// indicator: discovery keeps running in the background
 	live := gtk.NewBox(gtk.OrientationHorizontal, 6)
 	liveSpin := gtk.NewSpinner()
@@ -142,7 +177,10 @@ func (w *window) build() {
 	w.search.SetPlaceholderText("Filter by model, serial number, hostname, IP …")
 	w.search.SetHExpand(true)
 	w.search.SetMaxWidthChars(48)
-	w.search.ConnectSearchChanged(func() { w.filter.Changed(gtk.FilterChangeDifferent) })
+	w.search.ConnectSearchChanged(func() {
+		w.filter.Changed(gtk.FilterChangeDifferent)
+		w.updateActions()
+	})
 	clamp := adw.NewClamp()
 	clamp.SetMaximumSize(480)
 	clamp.SetChild(w.search)
@@ -151,6 +189,7 @@ func (w *window) build() {
 	menu := gio.NewMenu()
 	menu.Append("Use HTTPS only", "win.https-only")
 	menu.Append("Check axis.com for firmware updates", "win.fw-check")
+	menu.Append("Manual cameras", "win.manual")
 	menu.Append("Forget stored credentials", "win.forget")
 	menu.Append("About "+appName, "app.about")
 	mb := gtk.NewMenuButton()
@@ -197,8 +236,18 @@ func (w *window) build() {
 	empty.SetTitle("Searching for Axis devices …")
 	empty.SetDescription("Devices on the local network are found via Bonjour/mDNS and SSDP.")
 
+	noMatches := adw.NewStatusPage()
+	noMatches.SetIconName("edit-find-symbolic")
+	noMatches.SetTitle("No devices match the filter")
+	noMatches.SetDescription("Change the search text or clear the filter to see all devices.")
+	clearFilter := gtk.NewButtonWithLabel("Clear filter")
+	clearFilter.AddCSSClass("suggested-action")
+	clearFilter.ConnectClicked(func() { w.search.SetText("") })
+	noMatches.SetChild(clearFilter)
+
 	w.stack = gtk.NewStack()
 	w.stack.AddNamed(empty, "empty")
+	w.stack.AddNamed(noMatches, "nofilter")
 	w.stack.AddNamed(scroller, "list")
 
 	// action bar
@@ -222,16 +271,38 @@ func (w *window) build() {
 		content := adw.NewButtonContent()
 		content.SetLabel(b.label)
 		content.SetIconName(b.icon)
+		lock := gtk.NewImageFromIconName("system-lock-screen-symbolic")
+		lock.SetPixelSize(14)
+		lock.SetVAlign(gtk.AlignCenter)
+		lock.SetVisible(false)
+		box := gtk.NewBox(gtk.OrientationHorizontal, 6)
+		box.Append(content)
+		box.Append(lock)
 		button := gtk.NewButton()
-		button.SetChild(content)
+		button.SetChild(box)
+		button.AddCSSClass("action-button")
+		key := b.key
 		cb := b.cb
-		button.ConnectClicked(func() { cb() })
+		button.ConnectClicked(func() {
+			// Without a login, most actions first open the login dialog. The lock
+			// icon shows that; the buttons stay clickable. The website and live view
+			// work without a login too (anonymous viewers, web UI login).
+			if !actionWithoutLogin(key) {
+				if d := w.selected(); d != nil && requiresLogin(d) {
+					w.unlockThen(d, cb)
+					return
+				}
+			}
+			cb()
+		})
 		if b.end {
 			bar.PackEnd(button)
 		} else {
 			bar.PackStart(button)
 		}
-		w.buttons[b.key] = button
+		w.buttons[key] = button
+		w.contents[key] = content
+		w.locks[key] = lock
 	}
 	w.buttons["restart"].AddCSSClass("destructive-action")
 	w.buttons["reset"].AddCSSClass("destructive-action")
@@ -246,7 +317,8 @@ func (w *window) build() {
 	for name, cb := range map[string]func(){
 		"rescan": w.rescan,
 		"search": func() { w.search.GrabFocus() },
-		"forget": func() { w.creds = map[string][2]string{}; w.toast("Credentials forgotten") },
+		"manual": w.onAddManual,
+		"forget": w.forgetCredentials,
 	} {
 		a := gio.NewSimpleAction(name, nil)
 		cb := cb
@@ -310,7 +382,7 @@ func (w *window) makeColumn(idx int, c column) *gtk.ColumnViewColumn {
 				if n == 2 {
 					click.SetState(gtk.EventSequenceClaimed)
 					if d := w.reg.Get(w.keyOfLabel(idx, l)); d != nil && d.IP != "" {
-						gtk.NewURILauncher(d.WebURL()).Launch(context.Background(), &w.Window, nil)
+						w.openWeb(d)
 					}
 				}
 			})
@@ -462,7 +534,19 @@ func (w *window) render(key string, l *gtk.Label, idx int, d *axis.Device) {
 		l.RemoveCSSClass("warning")
 		l.SetTooltipText("")
 		if !d.PingAt.IsZero() {
-			l.SetTooltipText("Last ping: " + d.PingAt.Format("15:04:05") + " (every second)")
+			tip := "Last ping: " + d.PingAt.Format("15:04:05") + " (every 2 s)"
+			switch {
+			case d.Ping < 0 && d.PingAddr != "":
+				tip += "\nNo reply from " + d.PingAddr
+			case d.Ping < 0:
+				tip += "\nNo reply"
+			case d.PingAddr != "":
+				tip += "\nvia " + d.PingAddr
+				if f := axis.AddrFamily(d.PingAddr); f != "" {
+					tip += " (" + f + ")"
+				}
+			}
+			l.SetTooltipText(tip)
 			if d.Ping < 0 {
 				l.AddCSSClass("warning")
 			}
@@ -470,11 +554,30 @@ func (w *window) render(key string, l *gtk.Label, idx int, d *axis.Device) {
 		return
 	}
 	if idx == ipv6Column {
+		if d.PreferredIPv6() == "" {
+			l.SetTooltipText("No IPv6 address known")
+			return
+		}
 		tip := "Double-click opens the web interface via IPv6"
 		if len(d.IPv6) > 1 {
 			tip = "All IPv6 addresses:\n" + strings.Join(d.IPv6, "\n") + "\n\n" + tip
 		}
 		l.SetTooltipText(tip)
+		return
+	}
+	if idx == routeColumn {
+		l.RemoveCSSClass("dim-label")
+		l.SetTooltipText("")
+		var parts []string
+		if d.RemoteIPv4Known {
+			parts = append(parts, "IPv4: "+localOrRouter(d.RemoteIPv4))
+		}
+		if d.RemoteIPv6Known {
+			parts = append(parts, "IPv6: "+localOrRouter(d.RemoteIPv6))
+		}
+		if len(parts) > 0 {
+			l.SetTooltipText("Route – " + strings.Join(parts, ", "))
+		}
 		return
 	}
 	if idx == connColumn {
@@ -486,7 +589,11 @@ func (w *window) render(key string, l *gtk.Label, idx int, d *axis.Device) {
 			l.SetTooltipText("Encrypted (certificate is not verified)")
 		case "HTTP":
 			l.AddCSSClass("warning")
-			l.SetTooltipText("Unencrypted – device doesn't offer HTTPS")
+			if d.Scheme == "http" {
+				l.SetTooltipText("Unencrypted – explicitly selected in the manual URL")
+			} else {
+				l.SetTooltipText("Unencrypted – device doesn't offer HTTPS")
+			}
 		}
 		return
 	}
@@ -517,6 +624,14 @@ func (w *window) render(key string, l *gtk.Label, idx int, d *axis.Device) {
 		}
 	case !d.Online:
 		l.AddCSSClass("dim-label")
+	case d.Status() == axis.StatusUnresolved:
+		l.AddCSSClass("warning")
+		l.SetText("⚠ " + axis.StatusUnresolved)
+		l.SetTooltipText("The hostname could not be resolved. Check DNS or enter an IP address.")
+	case d.Status() == axis.StatusNoVAPIX:
+		l.AddCSSClass("warning")
+		l.SetText("⚠ " + axis.StatusNoVAPIX)
+		l.SetTooltipText("The device answers, but not with the Axis VAPIX API.")
 	case d.AuthFailed:
 		l.AddCSSClass("error")
 		l.SetText("🔑 " + axis.StatusAuthFailed)
@@ -558,7 +673,7 @@ func (w *window) onStatusClicked(l *gtk.Label) {
 			w.unlock(d)
 		case d.NeedsSetup != nil && *d.NeedsSetup:
 			w.selectKey(key)
-			w.onPassword()
+			w.passwordAction(d)
 		}
 		return
 	}
@@ -575,7 +690,11 @@ func (w *window) selectKey(key string) {
 }
 
 // unlock asks for credentials and reads the locked device info with them.
-func (w *window) unlock(d *axis.Device) {
+func (w *window) unlock(d *axis.Device) { w.unlockThen(d, nil) }
+
+// unlockThen logs in and, after success, runs after (e.g. the action the user
+// originally clicked). This avoids having to click the same button twice.
+func (w *window) unlockThen(d *axis.Device, after func()) {
 	key := d.Key()
 	w.selectKey(key)
 	withLogin(w, d, "Log in", func(ctx context.Context, c *axis.Client) (axis.Device, error) {
@@ -585,19 +704,35 @@ func (w *window) unlock(d *axis.Device) {
 			w.onDevice(context.Background(), asUpdate(info, dev))
 		}
 		w.toast(label(d) + ": logged in")
+		if after != nil {
+			after()
+		}
 	})
 }
 
 func (w *window) matches(obj *coreglib.Object) bool {
-	q := strings.ToLower(strings.TrimSpace(w.search.Text()))
+	d := w.reg.Get(obj.Cast().(*gtk.StringObject).String())
+	return deviceMatches(d, w.search.Text())
+}
+
+// deviceMatches is the filter predicate (also used to count matches).
+func deviceMatches(d *axis.Device, query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
 		return true
 	}
-	d := w.reg.Get(obj.Cast().(*gtk.StringObject).String())
 	if d == nil {
 		return false
 	}
-	for _, s := range []string{d.Model, d.Serial, d.Hostname, d.IP, d.PreferredIPv6(), d.Iface, d.Firmware, d.Name} {
+	route := ""
+	if d.RemoteIPv4Known || d.RemoteIPv6Known {
+		route = "local"
+		if remoteText(d) != "" {
+			route = "remote"
+		}
+	}
+	for _, s := range []string{d.Model, d.Serial, d.Hostname, d.IP, d.IPv4(), d.PreferredIPv6(),
+		d.Iface, d.Firmware, d.Name, d.Status(), d.Connection(), route} {
 		if strings.Contains(strings.ToLower(s), q) {
 			return true
 		}
@@ -609,6 +744,18 @@ func (w *window) toast(msg string) {
 	t := adw.NewToast(msg)
 	t.SetTimeout(5)
 	w.toasts.AddToast(t)
+}
+
+// forgetCredentials clears the stored logins and resets the visible login state.
+func (w *window) forgetCredentials() {
+	w.creds = map[string][2]string{}
+	w.infoAt = map[string]time.Time{}
+	w.reg.ClearAuth()
+	for _, d := range w.reg.All() {
+		w.rerender(d.Key())
+	}
+	w.updateActions()
+	w.toast("Credentials forgotten – log in again when needed")
 }
 
 // selected returns the selected device if exactly one is selected.
@@ -644,7 +791,11 @@ func (w *window) updateActions() {
 			online++
 		}
 	}
+	locked := len(sel) == 1 && requiresLogin(sel[0])
 	for k, b := range w.buttons {
+		if img := w.locks[k]; img != nil {
+			img.SetVisible(locked && !actionWithoutLogin(k))
+		}
 		if k == "batch" {
 			b.SetSensitive(online >= 2)
 			b.SetVisible(len(sel) >= 2)
@@ -653,24 +804,67 @@ func (w *window) updateActions() {
 		if k == "firmware" {
 			b.SetSensitive(online >= 1)
 			b.SetTooltipText("Compare with axis.com and update the firmware")
-			continue
+		} else if k == "password" {
+			b.SetSensitive(usable)
+			b.SetVisible(len(sel) < 2)
+			switch {
+			case len(sel) == 1 && sel[0].Unlocked:
+				w.contents[k].SetLabel("Change password")
+				b.SetTooltipText("Change the password of a user")
+			case len(sel) == 1 && !needsInitialUser(sel[0]):
+				w.contents[k].SetLabel("Change password")
+				b.SetTooltipText("Log in first – then the password can be changed")
+			default:
+				w.contents[k].SetLabel("Set password")
+				b.SetTooltipText("Create the first administrator (factory state)")
+			}
+		} else {
+			b.SetSensitive(usable)
+			b.SetVisible(len(sel) < 2)
+			b.SetTooltipText("")
+			switch k {
+			case "reset":
+				b.SetTooltipText("Reset to factory defaults")
+			case "preview":
+				b.SetTooltipText("Tries anonymous access; asks for login only if the camera requires it")
+			case "browser":
+				b.SetTooltipText("Opens the web interface – log in there if required")
+			}
 		}
-		b.SetSensitive(usable)
-		b.SetVisible(len(sel) < 2)
+		if locked && !actionWithoutLogin(k) {
+			if k == "password" {
+				b.SetTooltipText("Log in required – then the password can be changed")
+			} else {
+				b.SetTooltipText("Log in required – click to log in")
+			}
+		}
 	}
 	n := w.keys.NItems()
+	shown := uint(0)
+	for _, d := range w.reg.All() {
+		if deviceMatches(d, w.search.Text()) {
+			shown++
+		}
+	}
 	switch n {
 	case 0:
 		w.search.SetPlaceholderText("Filter by model, serial number, hostname, IP …")
 	case 1:
 		w.search.SetPlaceholderText("1 device – filter …")
 	default:
-		w.search.SetPlaceholderText(fmt.Sprintf("%d devices – filter by model, serial number, IP …", n))
+		if shown > 0 && shown < n {
+			w.search.SetPlaceholderText(fmt.Sprintf("%d of %d devices – filter …", shown, n))
+		} else {
+			w.search.SetPlaceholderText(fmt.Sprintf("%d devices – filter by model, serial number, hostname, IP …", n))
+		}
 	}
-	if n > 0 {
-		w.stack.SetVisibleChildName("list")
-	} else {
+	switch {
+	case n == 0:
 		w.stack.SetVisibleChildName("empty")
+	case shown == 0:
+		w.stack.SetVisibleChildName("nofilter")
+	default:
+		w.stack.SetVisibleChildName("list")
 	}
 }
 
@@ -688,9 +882,161 @@ func (w *window) rescan() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	w.cancelScan = cancel
-	axis.Discover(ctx,
+	w.disc = axis.Discover(ctx,
 		func(d axis.Device) { ui(func() { w.onDevice(ctx, d) }) },
 		func(err error) { ui(func() { w.toast(err.Error()) }) })
+	for _, addr := range w.manual {
+		if err := w.disc.AddManual(addr); err != nil {
+			w.toast("Manual camera " + addr + ": " + err.Error())
+		}
+	}
+}
+
+// onAddManual opens the dialog for manually added cameras: enter one or more targets
+// and see the entries that are currently monitored.
+func (w *window) onAddManual() {
+	dlg := newFormDialog("Manual cameras", "Add", 520)
+	entry := entryRow("Addresses, hostnames, URLs or ranges", "")
+	dlg.add(note("Adds cameras that discovery doesn't find – for example in another " +
+		"subnet, via hostname or IPv6. Entries may be IP addresses, hostnames, complete " +
+		"http(s) URLs, CIDR prefixes (192.168.0.0/24), ranges (192.168.0.10-192.168.0.20, " +
+		"192.168.0.10-20) or wildcards (192.168.0.*). Separate several entries with comma, " +
+		"semicolon and/or spaces. Ping, offline detection and the VAPIX queries run exactly " +
+		"like for discovered devices. For a link-local IPv6 address append the interface, " +
+		"e.g. fe80::1234%eth0."))
+	dlg.add(boxedList(entry))
+
+	lb := gtk.NewListBox()
+	lb.SetSelectionMode(gtk.SelectionNone)
+	lb.AddCSSClass("boxed-list")
+	if len(w.manual) > 0 {
+		dlg.add(heading("Monitored entries"))
+		for _, spec := range w.manual {
+			lb.Append(w.manualRow(lb, spec))
+		}
+		dlg.add(lb)
+	}
+	dlg.apply.ConnectClicked(func() {
+		raw := entry.Text()
+		dlg.busy(true)
+		// Parsing/expanding large ranges can take a moment; keep the GTK thread free.
+		async(func() ([]axis.ManualEntry, error) {
+			return axis.ParseManual(raw)
+		}, func(entries []axis.ManualEntry) {
+			dlg.busy(false)
+			n, err := w.addParsed(entries)
+			if err != nil {
+				dlg.toast(err.Error())
+				return
+			}
+			dlg.Close()
+			if n == 1 {
+				w.toast("Monitoring 1 camera")
+			} else {
+				w.toast(fmt.Sprintf("Monitoring %d cameras", n))
+			}
+		}, func(err error) {
+			dlg.busy(false)
+			dlg.toast(err.Error())
+		})
+	})
+	dlg.Present(w)
+	entry.GrabFocus()
+}
+
+// manualRow shows a manually added entry with a button to stop monitoring it.
+func (w *window) manualRow(lb *gtk.ListBox, spec string) gtk.Widgetter {
+	r := adw.NewActionRow()
+	r.SetTitle(spec)
+	r.SetSubtitle("Added manually")
+	rm := gtk.NewButtonFromIconName("list-remove-symbolic")
+	rm.SetTooltipText("Stop monitoring this entry")
+	rm.SetVAlign(gtk.AlignCenter)
+	rm.AddCSSClass("flat")
+	rm.ConnectClicked(func() {
+		w.removeManual(spec)
+		lb.Remove(r)
+	})
+	r.AddSuffix(rm)
+	return r
+}
+
+// addParsed starts monitoring all new entries and stores them in the settings. It
+// returns the number of cameras (ranges may contain several).
+func (w *window) addParsed(entries []axis.ManualEntry) (int, error) {
+	var added []axis.ManualEntry
+	cameras := 0
+	seen := map[string]bool{}
+	for _, e := range entries {
+		if seen[e.Spec] || slices.Contains(w.manual, e.Spec) {
+			continue
+		}
+		seen[e.Spec] = true
+		added = append(added, e)
+		cameras += len(e.Devices)
+	}
+	if len(added) == 0 {
+		return 0, errors.New("these cameras are already being monitored")
+	}
+	for _, e := range added {
+		w.manual = append(w.manual, e.Spec)
+		if w.disc != nil {
+			for _, dev := range e.Devices {
+				w.disc.AddDevice(dev)
+			}
+		}
+	}
+	if err := updateSettings(func(s *settings) { s.Manual = w.manual }); err != nil {
+		w.toast("Entries not saved: " + err.Error())
+	}
+	return cameras, nil
+}
+
+// removeManual stops monitoring an entry and updates the stored list. The device list
+// is rebuilt by a new discovery run (remaining entries are added to it again).
+func (w *window) removeManual(spec string) {
+	i := slices.Index(w.manual, spec)
+	if i < 0 {
+		return
+	}
+	w.manual = slices.Delete(w.manual, i, i+1)
+	if err := updateSettings(func(s *settings) { s.Manual = w.manual }); err != nil {
+		w.toast("Setting not saved: " + err.Error())
+	}
+	w.forgetRemoved(spec)
+	w.rescan()
+	w.toast("No longer monitoring " + spec)
+}
+
+// forgetRemoved drops credentials/timestamps of devices that belonged to spec, so a
+// camera later reusing the address doesn't get the old password.
+func (w *window) forgetRemoved(spec string) {
+	entries, err := axis.ParseManual(spec)
+	if err != nil {
+		return
+	}
+	match := map[string]bool{}
+	for _, e := range entries {
+		for _, dev := range e.Devices {
+			if dev.IP != "" {
+				match[dev.IP] = true
+				match[strings.ToLower(dev.IP)] = true
+			}
+			if dev.Hostname != "" {
+				match[strings.ToLower(dev.Hostname)] = true
+			}
+		}
+	}
+	for _, d := range w.reg.All() {
+		if !match[d.IP] && !match[strings.ToLower(d.IP)] && !match[strings.ToLower(d.Hostname)] &&
+			!match[d.ResolvedIPv4] {
+			continue
+		}
+		delete(w.creds, d.Key())
+		delete(w.infoAt, d.Key())
+		delete(w.infoPending, d.Key())
+		delete(w.infoRunning, d.Key())
+	}
 }
 
 func (w *window) onDevice(ctx context.Context, d axis.Device) {
@@ -708,7 +1054,7 @@ func (w *window) onDevice(ctx context.Context, d axis.Device) {
 	}
 	if dev := w.reg.Get(key); !ch.Added && ch.Removed == "" && dev != nil && dev.Online == wasOnline &&
 		!d.PingAt.IsZero() {
-		w.rerender(key) // pure ping result: don't refilter the list (every second per device)
+		w.rerender(key) // pure ping result: don't refilter the list (every 2 s per device)
 		return
 	}
 	switch {
@@ -718,6 +1064,9 @@ func (w *window) onDevice(ctx context.Context, d axis.Device) {
 		w.replaceKey(ch.Removed, "")
 	case ch.Added:
 		w.keys.Append(key)
+	}
+	if ch.Removed != "" {
+		w.moveKeyState(ch.Removed, key)
 	}
 	w.rerender(key)
 	w.filter.Changed(gtk.FilterChangeDifferent)
@@ -747,12 +1096,12 @@ func (w *window) refreshInfo(key string) {
 		w.infoPending[key] = true
 		w.rerender(key)
 	}
-	ip, port, reg := d.IP, d.Port, w.reg
+	snap, reg := *d, w.reg
+	ip := snap.IP
 	async(func() (axis.Device, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		cl := axis.NewClient(ip, port, c[0], c[1])
-		return loginInfo(ctx, cl)
+		return loginInfo(ctx, snap.Client(c[0], c[1]))
 	}, func(info axis.Device) {
 		delete(w.infoPending, key)
 		delete(w.infoRunning, key)
@@ -767,13 +1116,23 @@ func (w *window) refreshInfo(key string) {
 		if reg != w.reg {
 			return
 		}
+		if errors.Is(err, axis.ErrNoUser) {
+			delete(w.creds, key)
+			if dev := reg.Get(key); dev != nil {
+				yes := true
+				w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP,
+					Port: dev.Port, Online: dev.Online, NeedsSetup: &yes})
+			}
+			return
+		}
 		if errors.Is(err, axis.ErrAuth) {
 			w.setAuth(key, false)
 			return
 		}
 		w.rerender(key)
 		if dev := reg.Get(key); dev != nil && dev.IP != ip {
-			w.refreshInfo(key) // address changed in the meantime → once more there
+			delete(w.infoAt, key) // force a new attempt at the changed address
+			w.refreshInfo(key)
 		}
 	})
 }
@@ -794,6 +1153,32 @@ func (w *window) setAuth(key string, ok bool) {
 	w.onDevice(context.Background(), u)
 }
 
+// moveKeyState moves credentials and query timestamps when a device is re-keyed
+// (e.g. IP → serial number).
+func (w *window) moveKeyState(old, key string) {
+	if old == "" || old == key {
+		return
+	}
+	if key != "" {
+		if c, ok := w.creds[old]; ok {
+			w.creds[key] = c
+		}
+		if t, ok := w.infoAt[old]; ok {
+			w.infoAt[key] = t
+		}
+		if w.infoPending[old] {
+			w.infoPending[key] = true
+		}
+		if w.infoRunning[old] {
+			w.infoRunning[key] = true
+		}
+	}
+	delete(w.creds, old)
+	delete(w.infoAt, old)
+	delete(w.infoPending, old)
+	delete(w.infoRunning, old)
+}
+
 // replaceKey replaces old in the list with key or removes it (key == "").
 func (w *window) replaceKey(old, key string) {
 	for i := uint(0); i < w.keys.NItems(); i++ {
@@ -806,6 +1191,16 @@ func (w *window) replaceKey(old, key string) {
 			return
 		}
 	}
+}
+
+// openWeb opens the web interface of d. Link-local IPv6 addresses need a local
+// forwarding because browsers don't support zones in URLs.
+func (w *window) openWeb(d *axis.Device) {
+	if strings.Contains(d.IP, "%") {
+		w.openIPv6(d)
+		return
+	}
+	gtk.NewURILauncher(d.WebURL()).Launch(context.Background(), &w.Window, nil)
 }
 
 // openIPv6 opens the web interface via IPv6. Link-local addresses need the interface
@@ -852,9 +1247,10 @@ func (w *window) updateLive() {
 	if w.live == nil {
 		return
 	}
-	tip := fmt.Sprintf("Devices are monitored continuously: ping every second, "+
-		"query every %d s. Without a reply for %d s a device is considered offline.",
-		int(axis.CheckInterval.Seconds()), int(axis.MaxAge.Seconds()))
+	tip := fmt.Sprintf("Devices are monitored continuously: ping every %d s, "+
+		"query every %d s. Offline after %d s without a reply (%d s if the device never "+
+		"answers pings).", int(axis.PingInterval.Seconds()), int(axis.CheckInterval.Seconds()),
+		int(axis.MaxAge.Seconds()), int(axis.MaxAgeNoPing.Seconds()))
 	var last time.Time
 	for _, d := range w.reg.All() {
 		if d.LastSeen.After(last) {

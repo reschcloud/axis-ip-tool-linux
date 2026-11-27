@@ -93,6 +93,19 @@ func TestParseNeighbors(t *testing.T) {
 	}
 }
 
+// A truncated/unaligned trailing attribute must not panic the parser.
+func TestParseNeighborsUnalignedTail(t *testing.T) {
+	mac := []byte{0xac, 0xcc, 0x8e, 0xbd, 0x07, 0x90}
+	m := neighMsg(0x02, net.ParseIP("fe80::aecc:8eff:febd:790"), mac)
+	tail := make([]byte, 5) // length 5, no padding
+	binary.NativeEndian.PutUint16(tail[0:2], 5)
+	binary.NativeEndian.PutUint16(tail[2:4], 99)
+	m.Data = append(m.Data, tail...)
+	if got := parseNeighbors([]syscall.NetlinkMessage{m}); len(got) != 1 {
+		t.Fatalf("parseNeighbors = %+v", got)
+	}
+}
+
 // Forwarding via ::1 (the zone is handled by net.Dial like with fe80::).
 func TestForwarder(t *testing.T) {
 	l, err := net.Listen("tcp", "[::1]:0")

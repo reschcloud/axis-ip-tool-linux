@@ -13,7 +13,7 @@ DESTDIR ?=
 BUILDFLAGS := -trimpath
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-APP_ID  := io.github.reschcloud.IPToolForAXIS
+APP_ID  := io.github.reschcloud.iptoolforaxis
 BIN     := build/ip-tool-for-axis build/ip-tool-for-axis-cli
 
 .PHONY: all build gui cli test install install-app uninstall \
@@ -46,6 +46,7 @@ install-app: $(BIN)
 		$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(APP_ID).svg
 	install -Dm644 data/icons/hicolor/symbolic/apps/$(APP_ID)-symbolic.svg \
 		$(DESTDIR)$(PREFIX)/share/icons/hicolor/symbolic/apps/$(APP_ID)-symbolic.svg
+	install -Dm644 LICENSE $(DESTDIR)$(PREFIX)/share/licenses/$(APP_ID)/LICENSE
 	@[ -n "$(DESTDIR)" ] || sh packaging/scripts/app-postinstall.sh
 
 uninstall:
@@ -53,7 +54,8 @@ uninstall:
 	      $(DESTDIR)$(PREFIX)/share/applications/$(APP_ID).desktop \
 	      $(DESTDIR)$(PREFIX)/share/metainfo/$(APP_ID).metainfo.xml \
 	      $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(APP_ID).svg \
-	      $(DESTDIR)$(PREFIX)/share/icons/hicolor/symbolic/apps/$(APP_ID)-symbolic.svg
+	      $(DESTDIR)$(PREFIX)/share/icons/hicolor/symbolic/apps/$(APP_ID)-symbolic.svg \
+	      $(DESTDIR)$(PREFIX)/share/licenses/$(APP_ID)/LICENSE
 	-sh packaging/scripts/app-postinstall.sh
 
 packages: build

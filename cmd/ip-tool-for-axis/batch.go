@@ -376,7 +376,7 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 				return
 			}
 			b.plan, b.planName = rows, filepath.Base(f.Path())
-			csvRow.SetSubtitle(fmt.Sprintf("%s – %d Zeilen", b.planName, len(rows)))
+			csvRow.SetSubtitle(fmt.Sprintf("%s – %d rows", b.planName, len(rows)))
 			csvClear.SetVisible(true)
 			for _, r := range rows {
 				if r.IP != "" {
@@ -468,7 +468,7 @@ func (b *batchDialog) settingsPage() *adw.NavigationPage {
 		}
 		if !s.SetNetwork && s.HostnamePattern == "" && s.TimeZone == "" && !s.SetNTP && b.plan == nil &&
 			!(s.InitPassword && factory > 0) {
-			b.toast("Nothing to change is selected")
+			b.toast("Nothing selected to change")
 			return
 		}
 		as, err := axis.PlanBatch(b.devs, s, b.all)
@@ -678,7 +678,7 @@ func (b *batchDialog) runPage() *adw.NavigationPage {
 		if target == "" {
 			target = a.Device.IP
 		}
-		r.SetSubtitle(fmt.Sprintf("%s → %s · wartet", a.Device.IP, target))
+		r.SetSubtitle(fmt.Sprintf("%s → %s · waiting", a.Device.IP, target))
 		sp := gtk.NewSpinner()
 		icon := gtk.NewImage()
 		icon.SetVisible(false)
@@ -757,6 +757,13 @@ func (b *batchDialog) runPage() *adw.NavigationPage {
 						b.w.creds[r.Device.Key()] = [2]string{s.User, s.Password}
 					}
 					b.w.setAuth(r.Device.Key(), true)
+				case errors.Is(r.Err, axis.ErrNoUser):
+					failed++
+					if dev := b.w.reg.Get(r.Device.Key()); dev != nil {
+						yes := true
+						b.w.onDevice(context.Background(), axis.Device{Serial: dev.Serial, IP: dev.IP,
+							Port: dev.Port, Online: dev.Online, NeedsSetup: &yes})
+					}
 				case errors.Is(r.Err, axis.ErrAuth):
 					failed++
 					b.w.setAuth(r.Device.Key(), false)

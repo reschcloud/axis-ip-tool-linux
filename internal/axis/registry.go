@@ -34,16 +34,21 @@ func (r *Registry) Update(d Device) Change {
 	var ch Change
 	if old, ok := r.byEP[ep]; ok && ep != "" && old != key {
 		od := r.devs[old]
-		switch {
-		case d.Serial == "":
-			key = old // message without serial belongs to the known device at this address
-		case od != nil && od.Serial == "":
-			// device was known only by address (e.g. SSDP) – now we know the serial number
-			delete(r.devs, old)
-			ch.Removed = old
-			if r.devs[key] == nil {
-				r.devs[key] = od
-				ch.Added = true
+		if od == nil || od.Endpoint() != ep {
+			// stale mapping from an earlier address (e.g. DHCP change)
+			delete(r.byEP, ep)
+		} else {
+			switch {
+			case d.Serial == "":
+				key = old // message without serial belongs to the known device at this address
+			case od.Serial == "":
+				// device was known only by address (e.g. SSDP) – now we know the serial number
+				delete(r.devs, old)
+				ch.Removed = old
+				if r.devs[key] == nil {
+					r.devs[key] = od
+					ch.Added = true
+				}
 			}
 		}
 	}
@@ -56,12 +61,24 @@ func (r *Registry) Update(d Device) Change {
 		r.devs[key] = dev
 		ch.Added = true
 	}
+	oldEP := dev.Endpoint()
 	dev.Merge(d)
-	if e := dev.Endpoint(); e != "" {
-		r.byEP[e] = key
+	newEP := dev.Endpoint()
+	if oldEP != "" && oldEP != newEP && r.byEP[oldEP] == key {
+		delete(r.byEP, oldEP)
+	}
+	if newEP != "" {
+		r.byEP[newEP] = key
 	}
 	ch.Key = key
 	return ch
+}
+
+// ClearAuth resets the login state of all devices (used by "forget credentials").
+func (r *Registry) ClearAuth() {
+	for _, d := range r.devs {
+		d.Unlocked, d.AuthFailed = false, false
+	}
 }
 
 // Get returns the device for key or nil.

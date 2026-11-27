@@ -10,7 +10,7 @@ set -eu
 
 REPO="${IP_TOOL_FOR_AXIS_REPO:-reschcloud/ip-tool-for-axis-linux}"
 BASE="https://github.com/$REPO/releases/latest/download"
-APP_ID=io.github.reschcloud.IPToolForAXIS
+APP_ID=io.github.reschcloud.iptoolforaxis
 PKG=ip-tool-for-axis
 
 mode=install app=pkg

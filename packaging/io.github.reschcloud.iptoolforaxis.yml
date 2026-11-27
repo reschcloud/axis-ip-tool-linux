@@ -1,0 +1,43 @@
+# Local Flatpak manifest. Build with `make flatpak`.
+# The Go modules are vendored (vendor/) so the build works offline, like on Flathub.
+# The Flathub submission manifest is in packaging/flathub/.
+id: io.github.reschcloud.iptoolforaxis
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+command: ip-tool-for-axis
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # talk to cameras via HTTP, SSDP discovery, ping
+  - --share=network
+  # Bonjour/mDNS discovery via the system's Avahi service
+  - --system-talk-name=org.freedesktop.Avahi
+
+build-options:
+  append-path: /usr/lib/sdk/golang/bin
+  env:
+    GOPATH: /run/build/ip-tool-for-axis/go
+    GOCACHE: /run/build/ip-tool-for-axis/go-cache
+    GOTOOLCHAIN: local
+    GOFLAGS: -mod=vendor
+    GOPROXY: "off"
+
+modules:
+  - name: ip-tool-for-axis
+    buildsystem: simple
+    build-commands:
+      - make build
+      - make install-app PREFIX=/app DESTDIR=/
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - build
+          - dist
+          - .flatpak-builder
